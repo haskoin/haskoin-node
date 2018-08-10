@@ -1,20 +1,18 @@
-resolver: lts-10.1
-flags: {}
-packages:
-- haskoin-core
-- haskoin-node
-- haskoin-store
-- haskoin-wallet
+resolver: lts-12.5
 extra-deps:
-- pbkdf-1.1.1.1
-- murmur3-1.0.3
-- secp256k1-0.5.3
-- concurrent-extra-0.7.0.10
-- parsec-extra-0.2.0.0
-- console-program-0.4.2.1
-- ansi-terminal-0.6.3.1
-- directory-1.2.7.1
-- time-1.7.0.1
-- foundation-edge-0.0.3
-- nqe-0.1.0.0
+- git: https://github.com/xenog/haskoin.git
+  commit: f1bcc70164e170bc974528907b60827b847b5a5e
+  subdirs:
+    - haskoin-core
+- git: https://github.com/xenog/nqe.git
+  commit: 237400f28c3379ddb902b37fc7f74f1f26a02d78
 - rocksdb-haskell-1.0.1
+# - pbkdf-1.1.1.1
+# - murmur3-1.0.3
+# - secp256k1-0.5.3
+# - concurrent-extra-0.7.0.10
+# - parsec-extra-0.2.0.0
+# - console-program-0.4.2.1
+# - ansi-terminal-0.6.3.1
+# - directory-1.2.7.1
+# - time-1.7.0.1
