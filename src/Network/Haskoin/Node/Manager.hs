@@ -10,49 +10,44 @@ module Network.Haskoin.Node.Manager
     ( manager
     ) where
 
-import           Control.Concurrent.Lifted
 import           Control.Concurrent.NQE
 import           Control.Concurrent.Unique
 import           Control.Monad
-import           Control.Monad.Base
 import           Control.Monad.Catch
 import           Control.Monad.Except
 import           Control.Monad.Logger
 import           Control.Monad.Reader
-import           Control.Monad.Trans.Control
 import           Control.Monad.Trans.Maybe
 import           Data.Bits
-import           Data.ByteString              (ByteString)
-import qualified Data.ByteString              as BS
+import           Data.ByteString             (ByteString)
+import qualified Data.ByteString             as BS
 import           Data.Default
 import           Data.Either
 import           Data.Function
 import           Data.List
 import           Data.Maybe
-import           Data.Serialize               (Get, Put, Serialize, decode,
-                                               encode, get, put)
-import qualified Data.Serialize               as S
+import           Data.Serialize              (Get, Put, Serialize, decode,
+                                              encode, get, put)
+import qualified Data.Serialize              as S
 import           Data.String.Conversions
-import           Data.Text                    (Text)
+import           Data.Text                   (Text)
 import           Data.Time.Clock
 import           Data.Word
-import           Database.RocksDB             (DB)
-import qualified Database.RocksDB             as RocksDB
+import           Database.RocksDB            (DB)
+import qualified Database.RocksDB            as RocksDB
 import           Network.Haskoin.Block
 import           Network.Haskoin.Constants
 import           Network.Haskoin.Network
 import           Network.Haskoin.Node.Common
 import           Network.Haskoin.Node.Peer
 import           Network.Haskoin.Util
-import           Network.Socket               (SockAddr (..))
+import           Network.Socket              (SockAddr (..))
 import           System.Random
+import           UnliftIO
+import           UnliftIO.Concurrent
 
 type MonadManager m
-     = ( MonadBase IO m
-       , MonadBaseControl IO m
-       , MonadThrow m
-       , MonadLoggerIO m
-       , MonadReader ManagerReader m)
+     = (MonadThrow m, MonadLoggerIO m, MonadReader ManagerReader m)
 
 data OnlinePeer = OnlinePeer
     { onlinePeerAddress     :: !SockAddr
@@ -136,12 +131,10 @@ instance Serialize PeerTimeAddress where
         S.put getPeerTimeAddress
 
 manager ::
-       ( MonadBase IO m
-       , MonadBaseControl IO m
+       ( MonadUnliftIO m
        , MonadThrow m
        , MonadLoggerIO m
        , MonadMask m
-       , Forall (Pure m)
        )
     => ManagerConfig
     -> m ()
@@ -168,7 +161,7 @@ manager cfg = do
         connectNewPeers
         managerLoop
 
-resolvePeers :: MonadManager m => m [(SockAddr, Priority)]
+resolvePeers :: (MonadUnliftIO m, MonadManager m) => m [(SockAddr, Priority)]
 resolvePeers = do
     cfg <- asks myConfig
     confPeers <-
@@ -330,7 +323,7 @@ backoffPeer sa = do
         $(logError) $ logMe <> cs msg
         error msg
 
-getNewPeer :: MonadManager m => m (Maybe SockAddr)
+getNewPeer :: (MonadUnliftIO m, MonadManager m) => m (Maybe SockAddr)
 getNewPeer = do
     ManagerConfig {..} <- asks myConfig
     onlinePeers <- map onlinePeerAddress <$> getOnlinePeers
@@ -359,14 +352,7 @@ getNewPeer = do
 getConnectedPeers :: MonadManager m => m [OnlinePeer]
 getConnectedPeers = filter onlinePeerConnected <$> getOnlinePeers
 
-withConnectLoop ::
-       ( MonadBaseControl IO m
-       , MonadLoggerIO m
-       , Forall (Pure m)
-       )
-    => Manager
-    -> m a
-    -> m a
+withConnectLoop :: (MonadUnliftIO m, MonadLoggerIO m) => Manager -> m a -> m a
 withConnectLoop mgr f = withAsync go $ const f
   where
     go =
@@ -375,14 +361,15 @@ withConnectLoop mgr f = withAsync go $ const f
             i <- liftIO (randomRIO (30, 90))
             threadDelay (i * 1000 * 1000)
 
-managerLoop :: (MonadManager m, MonadMask m) => m ()
+managerLoop :: (MonadUnliftIO m, MonadManager m, MonadMask m) => m ()
 managerLoop =
     forever $ do
         mgr <- asks mySelf
         msg <- receive mgr
         processManagerMessage msg
 
-processManagerMessage :: MonadManager m => ManagerMessage -> m ()
+processManagerMessage ::
+       (MonadUnliftIO m, MonadManager m) => ManagerMessage -> m ()
 
 processManagerMessage (ManagerSetFilter bf) = setFilter bf
 
@@ -400,19 +387,19 @@ processManagerMessage (ManagerNewPeers p as) =
     void . runMaybeT $ do
         ManagerConfig {..} <- asks myConfig
         guard mgrConfDiscover
-        pn <- peerString p
+        pn <- lift $ peerString p
         $(logInfo) $
             logMe <> "Received " <> logShow (length as) <> " peers from " <>
             cs pn
         forM_ as $ \(_, na) ->
             let sa = naAddress na
-            in storePeer sa PriorityNetwork
+            in lift $ storePeer sa PriorityNetwork
 
 processManagerMessage (ManagerKill e p) =
     void . runMaybeT $ do
         op <- MaybeT $ findPeer p
         $(logError) $ logMe <> "Killing peer " <> logShow (onlinePeerAddress op)
-        banPeer $ onlinePeerAddress op
+        lift $ banPeer $ onlinePeerAddress op
         onlinePeerAsync op `cancelWith` e
 
 processManagerMessage (ManagerSetPeerBest p bn) = modifyPeer f p
@@ -426,16 +413,16 @@ processManagerMessage (ManagerGetPeerBest p reply) = do
 
 processManagerMessage (ManagerSetPeerVersion p v) =
     void . runMaybeT $ do
-        modifyPeer f p
+        lift $ modifyPeer f p
         op <- MaybeT $ findPeer p
         runExceptT testVersion >>= \case
             Left ex -> do
-                banPeer $ onlinePeerAddress op
+                lift . banPeer $ onlinePeerAddress op
                 onlinePeerAsync op `cancelWith` ex
             Right () -> do
                 loadFilter
                 askForPeers
-                connectPeer (onlinePeerAddress op)
+                lift . connectPeer $ onlinePeerAddress op
                 announcePeer
   where
     f op =
@@ -517,7 +504,7 @@ getPeers = do
     return . map onlinePeerMailbox $
         sortBy (compare `on` median . onlinePeerPings) ps
 
-connectNewPeers :: (MonadManager m) => m ()
+connectNewPeers :: (MonadUnliftIO m, MonadManager m) => m ()
 connectNewPeers = do
     mo <- mgrConfMaxPeers <$> asks myConfig
     ps <- getOnlinePeers

@@ -3,12 +3,8 @@
 {-# LANGUAGE RankNTypes            #-}
 module Network.Haskoin.Node.Common where
 
-import           Control.Concurrent.Async.Lifted.Safe
 import           Control.Concurrent.NQE
 import           Control.Concurrent.Unique
-import           Control.Exception.Lifted
-import           Control.Monad.IO.Class
-import           Control.Monad.Trans.Control
 import           Control.Monad.Trans.Maybe
 import           Data.Hashable
 import           Data.Maybe
@@ -32,6 +28,7 @@ import           Network.Socket                       (AddrInfo (..),
                                                        defaultHints,
                                                        getAddrInfo, getNameInfo)
 import           Text.Read
+import           UnliftIO
 
 type HostPort = (Host, Port)
 type Host = String
@@ -195,7 +192,7 @@ data PeerMessage
 logShow :: Show a => a -> Text
 logShow x = cs (show x)
 
-toSockAddr :: (MonadBaseControl IO m, MonadIO m) => HostPort -> m [SockAddr]
+toSockAddr :: (MonadUnliftIO m) => HostPort -> m [SockAddr]
 toSockAddr (host, port) = go `catch` e
   where
     go =
@@ -213,7 +210,7 @@ toSockAddr (host, port) = go `catch` e
     e _ = return []
 
 fromSockAddr ::
-       (MonadBaseControl IO m, MonadIO m) => SockAddr -> m (Maybe HostPort)
+       (MonadUnliftIO m) => SockAddr -> m (Maybe HostPort)
 fromSockAddr sa = go `catch` e
   where
     go = do

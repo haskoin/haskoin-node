@@ -14,26 +14,25 @@ module Network.Haskoin.Node.Chain
 
 import           Control.Concurrent.NQE
 import           Control.Monad
-import           Control.Monad.Base
 import           Control.Monad.Catch
 import           Control.Monad.Logger
 import           Control.Monad.Reader
-import           Control.Monad.Trans.Control
 import           Control.Monad.Trans.Maybe
-import qualified Data.ByteString              as BS
+import qualified Data.ByteString             as BS
 import           Data.Default
 import           Data.Either
 import           Data.List
 import           Data.Maybe
-import           Data.Serialize               (decode, encode)
+import           Data.Serialize              (decode, encode)
 import           Data.String.Conversions
-import           Data.Text                    (Text)
-import           Database.RocksDB             (DB)
-import qualified Database.RocksDB             as RocksDB
+import           Data.Text                   (Text)
+import           Database.RocksDB            (DB)
+import qualified Database.RocksDB            as RocksDB
 import           Network.Haskoin.Block
 import           Network.Haskoin.Network
 import           Network.Haskoin.Node.Common
 import           Network.Haskoin.Util
+import           UnliftIO
 
 type MonadChain m
      = ( BlockHeaders m
@@ -91,13 +90,11 @@ instance (Monad m, MonadLoggerIO m, MonadReader ChainReader m) =>
                 (encode bn)
 
 chain ::
-       ( MonadBase IO m
-       , MonadBaseControl IO m
+       ( MonadUnliftIO m
        , MonadLoggerIO m
        , MonadThrow m
        , MonadMask m
        , MonadCatch m
-       , Forall (Pure m)
        )
     => ChainConfig
     -> m ()

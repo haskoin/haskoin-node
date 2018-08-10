@@ -7,27 +7,22 @@ module Network.Haskoin.Node.Node
     ( node
     ) where
 
-import           Control.Concurrent.Async.Lifted.Safe
 import           Control.Concurrent.NQE
-import           Control.Monad.Base
 import           Control.Monad.Catch
 import           Control.Monad.Logger
 import           Control.Monad.Trans
-import           Control.Monad.Trans.Control
-import           Data.Monoid
-import           Data.Text                            (Text)
+import           Data.Text                    (Text)
 import           Network.Haskoin.Node.Chain
 import           Network.Haskoin.Node.Common
 import           Network.Haskoin.Node.Manager
+import           UnliftIO
 
 node ::
-       ( MonadBase IO m
-       , MonadBaseControl IO m
-       , MonadLoggerIO m
+       ( MonadLoggerIO m
        , MonadThrow m
        , MonadMask m
        , MonadCatch m
-       , Forall (Pure m)
+       , MonadUnliftIO m
        )
     => NodeConfig
     -> m ()

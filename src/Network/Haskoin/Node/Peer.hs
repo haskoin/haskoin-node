@@ -11,13 +11,9 @@ module Network.Haskoin.Node.Peer
 ) where
 
 import           Control.Concurrent.NQE
-import           Control.Exception.Lifted
 import           Control.Monad
-import           Control.Monad.Base
-import           Control.Monad.IO.Class
 import           Control.Monad.Logger
 import           Control.Monad.Reader
-import           Control.Monad.Trans.Control
 import           Data.ByteString             (ByteString)
 import qualified Data.ByteString             as BS
 import qualified Data.ByteString.Lazy        as BL
@@ -36,8 +32,9 @@ import           Network.Haskoin.Node.Common
 import           Network.Haskoin.Transaction
 import           Network.Socket              (SockAddr)
 import           System.Random
+import           UnliftIO
 
-type MonadPeer m = (MonadBase IO m, MonadLoggerIO m, MonadReader PeerReader m)
+type MonadPeer m = (MonadLoggerIO m, MonadReader PeerReader m)
 
 data Pending
     = PendingTx !TxHash
@@ -63,11 +60,7 @@ logMsg = cs . msgType
 logPeer :: SockAddr -> Text
 logPeer sa = "[Peer " <> logShow sa <> "] "
 
-peer ::
-       (MonadBaseControl IO m, MonadLoggerIO m, Forall (Pure m))
-    => PeerConfig
-    -> Peer
-    -> m ()
+peer :: (MonadUnliftIO m, MonadLoggerIO m) => PeerConfig -> Peer -> m ()
 peer pc p =
     fromSockAddr na >>= \case
         Nothing -> do
@@ -80,8 +73,8 @@ peer pc p =
     na = naAddress (peerConfConnect pc)
     go = handshake >> exchangePing >> peerLoop
     peerSession hp ad = do
-        let src = appSource ad =$= inPeerConduit
-            snk = outPeerConduit =$= appSink ad
+        let src = appSource ad .| inPeerConduit
+            snk = outPeerConduit .| appSink ad
         withSource src p . const $ do
             pbox <- liftIO $ newTVarIO []
             let rd =
@@ -92,9 +85,9 @@ peer pc p =
                     , mySockAddr = na
                     , myPending = pbox
                     }
-            runReaderT (go $$ snk) rd
+            runReaderT (runConduit (go .| snk)) rd
 
-handshake :: MonadPeer m => Source m Message
+handshake :: MonadPeer m => ConduitT () Message m ()
 handshake = do
     p <- asks mySelf
     ch <- peerConfChain <$> asks myConfig
@@ -125,17 +118,16 @@ handshake = do
                 _ -> Nothing
         when (isNothing m) $ throwIO PeerTimeout
 
-peerLoop :: MonadPeer m => Source m Message
+peerLoop :: MonadPeer m => ConduitT () Message m ()
 peerLoop =
     forever $ do
         me <- asks mySelf
-        lp <- logMe
         m <- liftIO $ timeout (2 * 60 * 1000 * 1000) (receive me)
         case m of
             Nothing  -> exchangePing
             Just msg -> processMessage msg
 
-exchangePing :: MonadPeer m => Source m Message
+exchangePing :: MonadPeer m => ConduitT () Message m ()
 exchangePing = do
     lp <- logMe
     i <- liftIO randomIO
@@ -161,7 +153,6 @@ exchangePing = do
 
 checkStale :: MonadPeer m => ConduitM () Message m ()
 checkStale = do
-    lp <- logMe
     pbox <- asks myPending
     ps <- liftIO $ readTVarIO pbox
     case ps of
@@ -230,7 +221,6 @@ registerIncoming _ = return ()
 
 processMessage :: MonadPeer m => PeerMessage -> ConduitM () Message m ()
 processMessage m = do
-    lp <- logMe
     checkStale
     case m of
         PeerOutgoing msg -> do
@@ -240,10 +230,10 @@ processMessage m = do
             registerIncoming msg
             incoming msg
 
-logMe :: MonadPeer m => m Text
+logMe :: MonadReader PeerReader m => m Text
 logMe = logPeer <$> asks mySockAddr
 
-incoming :: MonadPeer m => Message -> Source m Message
+incoming :: MonadPeer m => Message -> ConduitT () Message m ()
 incoming m = do
     lp <- lift logMe
     p <- asks mySelf
@@ -301,20 +291,20 @@ incoming m = do
             managerGetAddr p mgr
         _ -> $(logWarn) $ lp <> "Ignoring message: " <> logMsg m
 
-inPeerConduit :: Monad m => Conduit ByteString m PeerMessage
+inPeerConduit :: MonadIO m => ConduitT ByteString PeerMessage m ()
 inPeerConduit = do
     headerBytes <- CB.take 24
-    when (BL.null headerBytes) $ throw MessageHeaderEmpty
+    when (BL.null headerBytes) $ throwIO MessageHeaderEmpty
     case decodeLazy headerBytes of
-        Left e -> throw $ DecodeMessageError e
+        Left e -> throwIO $ DecodeMessageError e
         Right (MessageHeader _ _cmd len _) -> do
-            when (len > 32 * 2 ^ (20 :: Int)) . throw $ PayloadTooLarge len
+            when (len > 32 * 2 ^ (20 :: Int)) . throwIO $ PayloadTooLarge len
             payloadBytes <- CB.take (fromIntegral len)
             case decodeLazy $ headerBytes `BL.append` payloadBytes of
-                Left e    -> throw $ CannotDecodePayload e
+                Left e    -> throwIO $ CannotDecodePayload e
                 Right msg -> yield $ PeerIncoming msg
             inPeerConduit
 
-outPeerConduit :: Monad m => Conduit Message m ByteString
+outPeerConduit :: Monad m => ConduitT Message ByteString m ()
 outPeerConduit = awaitForever $ yield . encode
 

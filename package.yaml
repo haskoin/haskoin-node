@@ -1,0 +1,58 @@
+name: haskoin-node
+version: '0.6.0.0'
+synopsis: Haskoin Node P2P library for Bitcoin and Bitcoin Cash
+description: Bitcoin and Bitcoin Cash peer-to-peer protocol library featuring headers-first synchronisation.
+category: Bitcoin, Finance, Network
+author: Jean-Pierre Rupp
+maintainer: xenog@protonmail.com
+license: PublicDomain
+license-file: UNLICENSE
+github: haskoin/haskoin.git
+homepage: http://github.com/haskoin/haskoin#readme
+bug-reports: http://github.com/haskoin/haskoin/issues
+dependencies:
+- base >=4.7 && <5
+- bytestring
+- cereal
+- data-default
+- exceptions
+- haskoin-core
+- rocksdb-haskell
+- monad-logger
+- mtl
+- network
+- nqe
+- random
+- stm
+- string-conversions
+- unliftio
+library:
+  source-dirs: src
+  exposed-modules:
+  - Network.Haskoin.Node
+  - Network.Haskoin.Node.Common
+  dependencies:
+  - aeson
+  - containers
+  - conduit
+  - conduit-extra
+  - deepseq
+  - either
+  - hashable
+  - text
+  - time
+  - transformers
+  - unique
+tests:
+  haskoin-node-test:
+    main: Spec.hs
+    source-dirs: test
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - directory
+    - filepath
+    - haskoin-node
+    - hspec
