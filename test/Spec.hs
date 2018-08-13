@@ -33,7 +33,7 @@ data TestNode = TestNode
 
 main :: IO ()
 main = do
-    setTestnet3Network
+    setBTCtest
     hspec . describe "peer-to-peer client" $ do
         it "connects to a peer" $
             withTestNode "connect-one-peer" $ \TestNode {..} -> do
@@ -78,7 +78,7 @@ main = do
                         buildMerkleRoot (map txHash (blockTxns b))
                 testMerkle b1
                 testMerkle b2
-        it "downloads some Merkle blocks" $
+        it "downloads some merkle blocks" $
             withTestNode "get-merkle-blocks" $ \TestNode {..} -> do
                 let a = "mgpS4Zis8iwNhriKMro1QSGDAbY6pqzRtA"
                     k :: PubKeyC
@@ -123,7 +123,7 @@ main = do
                         _ -> return ()
                 ps <- managerGetPeers testMgr
                 length ps `shouldSatisfy` (>= 2)
-        it "connects and sync some headers" $
+        it "connects and syncs some headers" $
             withTestNode "connect-sync" $ \TestNode {..} -> do
                 let h =
                         "000000009ec921df4bb16aedd11567e27ede3c0b63835b257475d64a059f102b"
