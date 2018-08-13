@@ -1,7 +1,7 @@
 resolver: lts-12.5
 extra-deps:
 - git: https://github.com/haskoin/haskoin-core.git
-  commit: 843596abea9f46e4eed5fd7a69638b9b10a9398e
+  commit: 8739a4ae4f43c86b55b1c5c068bb2b3ea663c2b8
 - git: https://github.com/xenog/nqe.git
   commit: c663fabb2f197f7db49ccbc1361150cd13c1f553
 - rocksdb-haskell-1.0.1
