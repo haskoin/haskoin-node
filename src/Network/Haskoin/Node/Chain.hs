@@ -14,24 +14,20 @@ module Network.Haskoin.Node.Chain
 
 import           Control.Concurrent.NQE
 import           Control.Monad
-import           Control.Monad.Catch
 import           Control.Monad.Logger
 import           Control.Monad.Reader
-import           Control.Monad.Trans.Maybe
 import qualified Data.ByteString             as BS
-import           Data.Default
 import           Data.Either
-import           Data.List
+import           Data.List                   (nub)
 import           Data.Maybe
-import           Data.Serialize              (decode, encode)
-import           Data.String.Conversions
-import           Data.Text                   (Text)
+import           Data.Serialize
+import           Data.String
 import           Database.RocksDB            (DB)
 import qualified Database.RocksDB            as RocksDB
+import           Database.RocksDB.Query
 import           Network.Haskoin.Block
 import           Network.Haskoin.Network
 import           Network.Haskoin.Node.Common
-import           Network.Haskoin.Util
 import           UnliftIO
 
 type MonadChain m
@@ -51,50 +47,53 @@ data ChainReader = ChainReader
     , chainState :: !(TVar ChainState)
     }
 
+newtype BlockHeaderKey = BlockHeaderKey BlockHash deriving (Eq, Show)
+
+instance Serialize BlockHeaderKey where
+    get = do
+        guard . (== 0x90) =<< getWord8
+        bh <- get
+        return (BlockHeaderKey bh)
+    put (BlockHeaderKey bh) = do
+        putWord8 0x90
+        put bh
+
+data BestBlockKey = BestBlockKey deriving (Eq, Show)
+
+instance KeyValue BlockHeaderKey BlockNode
+instance KeyValue BestBlockKey BlockNode
+
+instance Serialize BestBlockKey where
+    get = do
+        guard . (== 0x91) =<< getWord8
+        return BestBlockKey
+    put BestBlockKey = putWord8 0x91
+
 instance (Monad m, MonadLoggerIO m, MonadReader ChainReader m) =>
          BlockHeaders m where
     addBlockHeader bn = do
         db <- asks headerDB
-        let bs = encode bn
-            sh = 0x90 `BS.cons` encode (headerHash (nodeHeader bn))
-        RocksDB.put db def sh bs
+        insert db (BlockHeaderKey (headerHash (nodeHeader bn))) bn
     getBlockHeader bh = do
         db <- asks headerDB
-        let sh = 0x90 `BS.cons` encode bh
-        bsM <- RocksDB.get db def sh
-        return $
-            fromRight (error "Could not decode block header") . decode <$> bsM
+        retrieve db Nothing (BlockHeaderKey bh)
     getBestBlockHeader = do
-        best <-
-            runMaybeT $ do
-                db <- asks headerDB
-                bs <- MaybeT (RocksDB.get db def (BS.singleton 0x91))
-                MaybeT (return (eitherToMaybe (decode bs)))
-        case best of
-            Nothing -> do
-                let msg = "Could not get best block from database"
-                $(logError) $ logMe <> cs msg
-                error msg
+        db <- asks headerDB
+        retrieve db Nothing BestBlockKey >>= \case
+            Nothing -> error "Could not get best block from database"
             Just b -> return b
     setBestBlockHeader bn = do
         db <- asks headerDB
-        let bs = encode bn
-        RocksDB.put db def (BS.singleton 0x91) bs
+        insert db BestBlockKey bn
     addBlockHeaders bns = do
         db <- asks headerDB
-        RocksDB.write db def (map f bns)
+        writeBatch db (map f bns)
       where
-        f bn =
-            RocksDB.Put
-                (0x90 `BS.cons` encode (headerHash (nodeHeader bn)))
-                (encode bn)
+        f bn = insertOp (BlockHeaderKey (headerHash (nodeHeader bn))) bn
 
 chain ::
        ( MonadUnliftIO m
        , MonadLoggerIO m
-       , MonadThrow m
-       , MonadMask m
-       , MonadCatch m
        )
     => ChainConfig
     -> m ()
@@ -111,10 +110,10 @@ chain cfg = do
     run = do
         let gs = encode genesisNode
         db <- asks headerDB
-        m <- RocksDB.get db def (BS.singleton 0x91)
+        m <- RocksDB.get db RocksDB.defaultReadOptions (BS.singleton 0x91)
         when (isNothing m) $ do
             addBlockHeader genesisNode
-            RocksDB.put db def (BS.singleton 0x91) gs
+            RocksDB.put db RocksDB.defaultWriteOptions (BS.singleton 0x91) gs
         forever $ do
             msg <- receive $ chainConfChain cfg
             processChainMessage msg
@@ -130,7 +129,7 @@ processChainMessage (ChainNewHeaders p hcs) = do
     case bhsE of
         Right bhs -> conn bb bhs spM
         Left e -> do
-            $(logWarn) $ logMe <> "Could not connect headers: " <> cs e
+            $(logWarn) $ logMe <> "Could not connect headers: " <> fromString e
             case spM of
                 Nothing -> do
                     bb' <- getBestBlockHeader
@@ -151,7 +150,8 @@ processChainMessage (ChainNewHeaders p hcs) = do
   where
     synced bb = do
         $(logInfo) $
-            logMe <> "Headers synced to height " <> cs (show $ nodeHeight bb)
+            logMe <> "Headers synced to height " <>
+            fromString (show (nodeHeight bb))
         st <- asks chainState
         liftIO . atomically . modifyTVar st $ \s -> s {syncingPeer = Nothing}
         MSendHeaders `sendMessage` p
@@ -274,5 +274,6 @@ syncHeaders bb p = do
                       BS.replicate 32 0
                 }
     PeerOutgoing m `send` p
-logMe :: Text
+
+logMe :: IsString a => a
 logMe = "[Chain] "

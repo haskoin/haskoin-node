@@ -16,14 +16,14 @@ import           Control.Monad.Logger
 import           Control.Monad.Reader
 import           Data.ByteString             (ByteString)
 import qualified Data.ByteString             as BS
+import qualified Data.ByteString.Char8       as C8
 import qualified Data.ByteString.Lazy        as BL
 import           Data.Conduit
 import qualified Data.Conduit.Binary         as CB
 import           Data.Conduit.Network
 import           Data.Maybe
 import           Data.Serialize
-import           Data.String.Conversions
-import           Data.Text                   (Text)
+import           Data.String
 import           Data.Time.Clock
 import           Data.Word
 import           Network.Haskoin.Block
@@ -54,10 +54,10 @@ data PeerReader = PeerReader
 time :: Int
 time = 15 * 1000 * 1000
 
-logMsg :: Message -> Text
-logMsg = cs . msgType
+logMsg :: IsString a => Message -> a
+logMsg = fromString . msgType
 
-logPeer :: SockAddr -> Text
+logPeer :: (Semigroup a, IsString a) => SockAddr -> a
 logPeer sa = "[Peer " <> logShow sa <> "] "
 
 peer :: (MonadUnliftIO m, MonadLoggerIO m) => PeerConfig -> Peer -> m ()
@@ -67,7 +67,7 @@ peer pc p =
             $(logError) $ logPeer na <> "Invalid network address"
             throwIO PeerAddressInvalid
         Just (host, port) -> do
-            let cset = clientSettings port (cs host)
+            let cset = clientSettings port (C8.pack host)
             runGeneralTCPClient cset (peerSession (host, port))
   where
     na = naAddress (peerConfConnect pc)
@@ -230,7 +230,7 @@ processMessage m = do
             registerIncoming msg
             incoming msg
 
-logMe :: MonadReader PeerReader m => m Text
+logMe :: (Semigroup a, IsString a, MonadReader PeerReader m) => m a
 logMe = logPeer <$> asks mySockAddr
 
 incoming :: MonadPeer m => Message -> ConduitT () Message m ()

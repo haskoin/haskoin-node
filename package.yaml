@@ -17,8 +17,6 @@ dependencies:
 - base >=4.7 && <5
 - bytestring
 - cereal
-- data-default
-- exceptions
 - haskoin-core
 - rocksdb-haskell
 - monad-logger
@@ -26,8 +24,8 @@ dependencies:
 - network
 - nqe
 - random
-- stm
-- string-conversions
+- resourcet
+- rocksdb-query
 - unliftio
 library:
   source-dirs: src
@@ -35,16 +33,10 @@ library:
   - Network.Haskoin.Node
   - Network.Haskoin.Node.Common
   dependencies:
-  - aeson
-  - containers
   - conduit
   - conduit-extra
-  - deepseq
-  - either
   - hashable
-  - text
   - time
-  - transformers
   - unique
 tests:
   haskoin-node-test:
@@ -55,7 +47,5 @@ tests:
     - -rtsopts
     - -with-rtsopts=-N
     dependencies:
-    - directory
-    - filepath
     - haskoin-node
     - hspec

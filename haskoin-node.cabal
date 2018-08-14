@@ -2,7 +2,7 @@
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 90873c88aa867fe949ab57f0a666854accd7e49dc2e8ddc4d19b376d2952db80
+-- hash: 89afeaff0b22f378634b699defaaca829f0a158d2ab05dbd1dc8cc75e871bd4c
 
 name:           haskoin-node
 version:        1.0.0
@@ -18,6 +18,10 @@ license-file:   UNLICENSE
 build-type:     Simple
 cabal-version:  >= 1.10
 
+extra-source-files:
+    CHANGELOG.md
+    README.md
+
 source-repository head
   type: git
   location: https://github.com/haskoin/haskoin.git
@@ -26,17 +30,11 @@ library
   hs-source-dirs:
       src
   build-depends:
-      aeson
-    , base >=4.7 && <5
+      base >=4.7 && <5
     , bytestring
     , cereal
     , conduit
     , conduit-extra
-    , containers
-    , data-default
-    , deepseq
-    , either
-    , exceptions
     , hashable
     , haskoin-core
     , monad-logger
@@ -44,12 +42,10 @@ library
     , network
     , nqe
     , random
+    , resourcet
     , rocksdb-haskell
-    , stm
-    , string-conversions
-    , text
+    , rocksdb-query
     , time
-    , transformers
     , unique
     , unliftio
   exposed-modules:
@@ -73,10 +69,6 @@ test-suite haskoin-node-test
       base >=4.7 && <5
     , bytestring
     , cereal
-    , data-default
-    , directory
-    , exceptions
-    , filepath
     , haskoin-core
     , haskoin-node
     , hspec
@@ -85,9 +77,9 @@ test-suite haskoin-node-test
     , network
     , nqe
     , random
+    , resourcet
     , rocksdb-haskell
-    , stm
-    , string-conversions
+    , rocksdb-query
     , unliftio
   other-modules:
       Paths_haskoin_node

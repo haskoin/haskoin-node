@@ -8,10 +8,8 @@ module Network.Haskoin.Node.Node
     ) where
 
 import           Control.Concurrent.NQE
-import           Control.Monad.Catch
 import           Control.Monad.Logger
-import           Control.Monad.Trans
-import           Data.Text                    (Text)
+import           Data.String
 import           Network.Haskoin.Node.Chain
 import           Network.Haskoin.Node.Common
 import           Network.Haskoin.Node.Manager
@@ -19,9 +17,6 @@ import           UnliftIO
 
 node ::
        ( MonadLoggerIO m
-       , MonadThrow m
-       , MonadMask m
-       , MonadCatch m
        , MonadUnliftIO m
        )
     => NodeConfig
@@ -57,5 +52,5 @@ node cfg = do
         }
     deadPeer ex = PeerStopped ex `sendSTM` nodeManager cfg
 
-logMe :: Text
+logMe :: IsString a => a
 logMe = "[Node] "

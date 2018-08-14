@@ -5,11 +5,9 @@
 {-# LANGUAGE RecordWildCards       #-}
 import           Control.Concurrent.NQE
 import           Control.Monad
-import           Control.Monad.Catch
 import           Control.Monad.Logger
 import           Control.Monad.Trans
 import qualified Data.ByteString             as BS
-import           Data.Default
 import           Data.Either
 import           Data.Maybe
 import           Data.Serialize
@@ -158,7 +156,7 @@ main = do
                             | p == p' -> Just b
                         _ -> Nothing
                 headerHash (blockHeader b) `shouldBe` h
-        it "attemts to get inexistent things" $
+        it "attempts to get inexistent things" $
             withTestNode "download-fail" $ \TestNode {..} -> do
                 let h =
                         TxHash .
@@ -193,7 +191,7 @@ main = do
                     headerHash (nodeHeader p) `shouldBe` h
 
 withTestNode ::
-       (MonadUnliftIO m, MonadMask m)
+       (MonadUnliftIO m)
     => String
     -> (TestNode -> m ())
     -> m ()
@@ -206,7 +204,7 @@ withTestNode t f =
         db <-
             RocksDB.open
                 w
-                def
+                RocksDB.defaultOptions
                 { RocksDB.createIfMissing = True
                 , RocksDB.compression = RocksDB.SnappyCompression
                 }

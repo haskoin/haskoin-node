@@ -1,32 +1,26 @@
 {-# LANGUAGE FlexibleContexts      #-}
+{-# LANGUAGE LambdaCase            #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RankNTypes            #-}
 module Network.Haskoin.Node.Common where
 
 import           Control.Concurrent.NQE
 import           Control.Concurrent.Unique
-import           Control.Monad.Trans.Maybe
 import           Data.Hashable
-import           Data.Maybe
-import           Data.String.Conversions
-import           Data.Text                            (Text)
+import           Data.String
 import           Data.Time.Clock
 import           Data.Time.Clock.POSIX
 import           Data.Word
-import           Database.RocksDB                     (DB)
+import           Database.RocksDB            (DB)
 import           Network.Haskoin.Block
 import           Network.Haskoin.Constants
 import           Network.Haskoin.Network
 import           Network.Haskoin.Transaction
-import           Network.Socket                       (AddrInfo (..),
-                                                       AddrInfoFlag (..),
-                                                       Family (..),
-                                                       NameInfoFlag (..),
-                                                       SockAddr (..),
-                                                       SocketType (..),
-                                                       addrAddress,
-                                                       defaultHints,
-                                                       getAddrInfo, getNameInfo)
+import           Network.Socket              (AddrInfo (..), AddrInfoFlag (..),
+                                              Family (..), NameInfoFlag (..),
+                                              SockAddr (..), SocketType (..),
+                                              addrAddress, defaultHints,
+                                              getAddrInfo, getNameInfo)
 import           Text.Read
 import           UnliftIO
 
@@ -189,8 +183,8 @@ data PeerMessage
     = PeerOutgoing !Message
     | PeerIncoming !Message
 
-logShow :: Show a => a -> Text
-logShow x = cs (show x)
+logShow :: (Show a, IsString b) => a -> b
+logShow = fromString . show
 
 toSockAddr :: (MonadUnliftIO m) => HostPort -> m [SockAddr]
 toSockAddr (host, port) = go `catch` e
@@ -343,12 +337,10 @@ chainGetSplitBlock l r c = ChainGetSplit l r `query` c
 
 chainBlockMain :: MonadIO m => BlockHash -> Chain -> m Bool
 chainBlockMain bh ch =
-    fmap (fromMaybe False) $
-    runMaybeT $ do
-        bb <- chainGetBest ch
-        bn <- MaybeT $ bh `chainGetBlock` ch
-        ba <- MaybeT $ chainGetAncestor (nodeHeight bn) bb ch
-        return $ bn == ba
+    chainGetBest ch >>= \bb ->
+        chainGetBlock bh ch >>= \case
+            Nothing -> return False
+            bm@(Just bn) -> (== bm) <$> chainGetAncestor (nodeHeight bn) bb ch
 
 chainIsSynced :: MonadIO m => Chain -> m Bool
 chainIsSynced ch = ChainIsSynced `query` ch
