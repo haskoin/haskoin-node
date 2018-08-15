@@ -18,7 +18,7 @@ import           Control.Monad.Logger
 import           Control.Monad.Reader
 import qualified Data.ByteString             as BS
 import           Data.Either
-import           Data.List                   (nub)
+import           Data.List                   (nub, delete)
 import           Data.Maybe
 import           Data.Serialize
 import           Data.String
@@ -186,18 +186,22 @@ processChainMessage (ChainNewHeaders p hcs) = do
 
 processChainMessage (ChainNewPeer p) = do
     st <- asks chainState
-    sp <- liftIO . atomically $ do
-        modifyTVar st $ \s -> s {newPeers = p : newPeers s}
-        syncingPeer <$> readTVar st
+    sp <-
+        liftIO . atomically $ do
+            modifyTVar st $ \s -> s {newPeers = nub $ p : newPeers s}
+            syncingPeer <$> readTVar st
     case sp of
         Nothing -> processSyncQueue
-        Just _  -> return ()
+        Just _ -> return ()
+
+-- Getting a new block should trigger an action equivalent to getting a new peer
+processChainMessage (ChainNewBlocks p _) = processChainMessage (ChainNewPeer p)
 
 processChainMessage (ChainRemovePeer p) = do
     st <- asks chainState
     sp <-
         liftIO . atomically $ do
-            modifyTVar st $ \s -> s {newPeers = filter (/= p) (newPeers s)}
+            modifyTVar st $ \s -> s {newPeers = delete p (newPeers s)}
             syncingPeer <$> readTVar st
     case sp of
         Just p' ->
@@ -257,12 +261,11 @@ processSyncQueue = do
             p:_ -> syncHeaders bb p
 
 syncHeaders :: MonadChain m => BlockNode -> Peer -> m ()
-
 syncHeaders bb p = do
     st <- asks chainState
     s <- liftIO $ readTVarIO st
     liftIO . atomically . writeTVar st $
-        s {syncingPeer = Just p, newPeers = filter (/= p) (newPeers s)}
+        s {syncingPeer = Just p, newPeers = delete p (newPeers s)}
     loc <- blockLocator bb
     let m =
             MGetHeaders

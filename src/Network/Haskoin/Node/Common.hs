@@ -130,6 +130,7 @@ data ChainMessage
                     !(Reply BlockNode)
     | ChainGetBlock !BlockHash
                     !(Reply (Maybe BlockNode))
+    | ChainNewBlocks !Peer ![BlockHash]
     | ChainSendHeaders !Peer
     | ChainIsSynced !(Reply Bool)
 

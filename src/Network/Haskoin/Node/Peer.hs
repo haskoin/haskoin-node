@@ -258,18 +258,18 @@ incoming m = do
         MAddr (Addr as) -> managerNewPeers p as mgr
         MInv (Inv is) -> do
             let ts = [TxHash (invHash i) | i <- is, invType i == InvTx]
-            unless (null ts) $
-                liftIO . atomically . forM_ ts $ l . (,) p . TxAvail
-        MTx tx ->
-            liftIO . atomically $ l (p, GotTx tx)
-        MBlock b ->
-            liftIO . atomically $ l (p, GotBlock b)
-        MMerkleBlock b ->
-            liftIO . atomically $ l (p, GotMerkleBlock b)
-        MHeaders (Headers hcs) ->
-            ChainNewHeaders p hcs `send` ch
-        MGetData (GetData d) ->
-            liftIO . atomically $ l (p, SendData d)
+                bs =
+                    [ BlockHash (invHash i)
+                    | i <- is
+                    , invType i == InvBlock || invType i == InvMerkleBlock
+                    ]
+            forM_ ts $ liftIO . atomically . l . (,) p . TxAvail
+            unless (null bs) $ ChainNewBlocks p bs `send` ch
+        MTx tx -> liftIO . atomically $ l (p, GotTx tx)
+        MBlock b -> liftIO . atomically $ l (p, GotBlock b)
+        MMerkleBlock b -> liftIO . atomically $ l (p, GotMerkleBlock b)
+        MHeaders (Headers hcs) -> ChainNewHeaders p hcs `send` ch
+        MGetData (GetData d) -> liftIO . atomically $ l (p, SendData d)
         MNotFound (NotFound ns) -> do
             let f (InvVector InvTx hash) = Just (TxNotFound (TxHash hash))
                 f (InvVector InvBlock hash) =
@@ -279,16 +279,11 @@ incoming m = do
                 f _ = Nothing
                 events = mapMaybe f ns
             liftIO . atomically $ mapM_ (l . (p, )) events
-        MGetBlocks g ->
-            liftIO . atomically $ l (p, SendBlocks g)
-        MGetHeaders h ->
-            liftIO . atomically $ l (p, SendHeaders h)
-        MReject r ->
-            liftIO . atomically $ l (p, Rejected r)
-        MMempool ->
-            liftIO . atomically $ l (p, WantMempool)
-        MGetAddr ->
-            managerGetAddr p mgr
+        MGetBlocks g -> liftIO . atomically $ l (p, SendBlocks g)
+        MGetHeaders h -> liftIO . atomically $ l (p, SendHeaders h)
+        MReject r -> liftIO . atomically $ l (p, Rejected r)
+        MMempool -> liftIO . atomically $ l (p, WantMempool)
+        MGetAddr -> managerGetAddr p mgr
         _ -> $(logWarn) $ lp <> "Ignoring message: " <> logMsg m
 
 inPeerConduit :: MonadIO m => ConduitT ByteString PeerMessage m ()
