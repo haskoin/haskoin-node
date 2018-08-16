@@ -33,8 +33,8 @@ data UniqueInbox a = UniqueInbox
     , uniqueId    :: Unique
     }
 
-type PeerSupervisor = Inbox SupervisorMessage
-type NodeSupervisor = Inbox SupervisorMessage
+type PeerSupervisor m = Inbox (SupervisorMessage m)
+type NodeSupervisor m = Inbox (SupervisorMessage m)
 
 type Peer = UniqueInbox PeerMessage
 type Chain = Inbox ChainMessage
@@ -53,19 +53,19 @@ instance Mailbox UniqueInbox where
     receiveSTM UniqueInbox {uniqueInbox = mbox} = receiveSTM mbox
     requeueMsg msg UniqueInbox {uniqueInbox = mbox} = msg `requeueMsg` mbox
 
-data NodeConfig = NodeConfig
+data NodeConfig m = NodeConfig
     { maxPeers       :: !Int
     , database       :: !DB
     , initPeers      :: ![HostPort]
     , discover       :: !Bool
     , nodeEvents     :: !(Listen NodeEvent)
     , netAddress     :: !NetworkAddress
-    , nodeSupervisor :: !(Inbox SupervisorMessage)
+    , nodeSupervisor :: !(NodeSupervisor m)
     , nodeChain      :: !Chain
     , nodeManager    :: !Manager
     }
 
-data ManagerConfig = ManagerConfig
+data ManagerConfig m = ManagerConfig
     { mgrConfMaxPeers       :: !Int
     , mgrConfDB             :: !DB
     , mgrConfPeers          :: ![HostPort]
@@ -75,7 +75,7 @@ data ManagerConfig = ManagerConfig
     , mgrConfNetAddr        :: !NetworkAddress
     , mgrConfManager        :: !Manager
     , mgrConfChain          :: !Chain
-    , mgrConfPeerSupervisor :: !PeerSupervisor
+    , mgrConfPeerSupervisor :: !(PeerSupervisor m)
     }
 
 data NodeEvent
@@ -209,7 +209,7 @@ fromSockAddr ::
 fromSockAddr sa = go `catch` e
   where
     go = do
-        (hostM, portM) <- liftIO $ getNameInfo flags True True sa
+        (hostM, portM) <- liftIO (getNameInfo flags True True sa)
         return $ (,) <$> hostM <*> (readMaybe =<< portM)
     flags = [NI_NUMERICHOST, NI_NUMERICSERV]
     e :: Monad m => SomeException -> m (Maybe a)

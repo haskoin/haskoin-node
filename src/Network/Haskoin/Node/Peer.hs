@@ -34,7 +34,7 @@ import           Network.Socket              (SockAddr)
 import           System.Random
 import           UnliftIO
 
-type MonadPeer m = (MonadLoggerIO m, MonadReader PeerReader m)
+type MonadPeer m = (MonadUnliftIO m, MonadLoggerIO m, MonadReader PeerReader m)
 
 data Pending
     = PendingTx !TxHash
@@ -76,7 +76,7 @@ peer pc p =
         let src = appSource ad .| inPeerConduit
             snk = outPeerConduit .| appSink ad
         withSource src p . const $ do
-            pbox <- liftIO $ newTVarIO []
+            pbox <- newTVarIO []
             let rd =
                     PeerReader
                     { myConfig = pc
@@ -97,9 +97,9 @@ handshake = do
     bb <- chainGetBest ch
     ver <- buildVersion nonce (nodeHeight bb) loc rmt
     yield $ MVersion ver
-    v <- liftIO $ remoteVer p
+    v <- lift (remoteVer p)
     yield MVerAck
-    remoteVerAck p
+    lift (remoteVerAck p)
     mgr <- peerConfManager <$> asks myConfig
     managerSetPeerVersion p v mgr
   where
@@ -113,7 +113,7 @@ handshake = do
             Nothing -> throwIO PeerTimeout
     remoteVerAck p = do
         m <-
-            liftIO . timeout time . receiveMatch p $ \case
+            timeout time . receiveMatch p $ \case
                 PeerIncoming MVerAck -> Just ()
                 _ -> Nothing
         when (isNothing m) $ throwIO PeerTimeout
@@ -122,7 +122,7 @@ peerLoop :: MonadPeer m => ConduitT () Message m ()
 peerLoop =
     forever $ do
         me <- asks mySelf
-        m <- liftIO $ timeout (2 * 60 * 1000 * 1000) (receive me)
+        m <- lift $ timeout (2 * 60 * 1000 * 1000) (receive me)
         case m of
             Nothing  -> exchangePing
             Just msg -> processMessage msg
@@ -136,7 +136,7 @@ exchangePing = do
     mgr <- peerConfManager <$> asks myConfig
     t1 <- liftIO getCurrentTime
     m <-
-        liftIO . timeout time . receiveMatch me $ \case
+        lift . timeout time . receiveMatch me $ \case
             PeerIncoming (MPong (Pong j))
                 | i == j -> Just ()
             _ -> Nothing
@@ -154,7 +154,7 @@ exchangePing = do
 checkStale :: MonadPeer m => ConduitM () Message m ()
 checkStale = do
     pbox <- asks myPending
-    ps <- liftIO $ readTVarIO pbox
+    ps <- readTVarIO pbox
     case ps of
         [] -> return ()
         (_, ts):_ -> do
@@ -170,7 +170,7 @@ registerOutgoing (MGetData (GetData ivs)) = do
             case toPending iv of
                 Nothing -> return Nothing
                 Just p  -> return $ Just (p, cur)
-    liftIO . atomically $ modifyTVar pbox (++ ms)
+    atomically (modifyTVar pbox (++ ms))
   where
     toPending InvVector {invType = InvTx, invHash = hash} =
         Just (PendingTx (TxHash hash))
@@ -182,14 +182,13 @@ registerOutgoing (MGetData (GetData ivs)) = do
 registerOutgoing MGetHeaders {} = do
     pbox <- asks myPending
     cur <- computeTime
-    liftIO . atomically $
-        modifyTVar pbox (reverse . ((PendingHeaders, cur) :) . reverse)
+    atomically (modifyTVar pbox (reverse . ((PendingHeaders, cur) :) . reverse))
 registerOutgoing _ = return ()
 
 registerIncoming :: MonadPeer m => Message -> m ()
-registerIncoming (MNotFound (NotFound ivs)) = do
-    pbox <- asks myPending
-    liftIO . atomically $ modifyTVar pbox (filter (matchNotFound . fst))
+registerIncoming (MNotFound (NotFound ivs)) =
+    asks myPending >>= \pbox ->
+        atomically (modifyTVar pbox (filter (matchNotFound . fst)))
   where
     matchNotFound (PendingTx (TxHash hash)) = InvVector InvTx hash `notElem` ivs
     matchNotFound (PendingBlock (BlockHash hash)) =
@@ -198,25 +197,24 @@ registerIncoming (MNotFound (NotFound ivs)) = do
         InvVector InvBlock hash `notElem` ivs &&
         InvVector InvMerkleBlock hash `notElem` ivs
     matchNotFound _ = False
-registerIncoming (MTx t) = do
-    pbox <- asks myPending
-    liftIO . atomically $
-        modifyTVar pbox (filter ((/= PendingTx (txHash t)) . fst))
-registerIncoming (MBlock b) = do
-    pbox <- asks myPending
-    liftIO . atomically $
+registerIncoming (MTx t) =
+    asks myPending >>= \pbox ->
+        atomically (modifyTVar pbox (filter ((/= PendingTx (txHash t)) . fst)))
+registerIncoming (MBlock b) =
+    asks myPending >>= \pbox ->
+        atomically $
         modifyTVar
             pbox
             (filter ((/= PendingBlock (headerHash (blockHeader b))) . fst))
-registerIncoming (MMerkleBlock b) = do
-    pbox <- asks myPending
-    liftIO . atomically $
+registerIncoming (MMerkleBlock b) =
+    asks myPending >>= \pbox ->
+        atomically $
         modifyTVar
             pbox
             (filter ((/= PendingMerkle (headerHash (merkleHeader b))) . fst))
-registerIncoming MHeaders {} = do
-    pbox <- asks myPending
-    liftIO . atomically $ modifyTVar pbox (filter ((/= PendingHeaders) . fst))
+registerIncoming MHeaders {} =
+    asks myPending >>= \pbox ->
+        atomically $ modifyTVar pbox (filter ((/= PendingHeaders) . fst))
 registerIncoming _ = return ()
 
 processMessage :: MonadPeer m => PeerMessage -> ConduitM () Message m ()
@@ -224,10 +222,10 @@ processMessage m = do
     checkStale
     case m of
         PeerOutgoing msg -> do
-            registerOutgoing msg
+            lift (registerOutgoing msg)
             yield msg
         PeerIncoming msg -> do
-            registerIncoming msg
+            lift (registerIncoming msg)
             incoming msg
 
 logMe :: (Semigroup a, IsString a, MonadReader PeerReader m) => m a
@@ -252,7 +250,7 @@ incoming m = do
                     , rejectData = BS.empty
                     }
         MPing (Ping n) -> yield $ MPong (Pong n)
-        MPong (Pong n) -> liftIO . atomically $ l (p, GotPong n)
+        MPong (Pong n) -> atomically (l (p, GotPong n))
         MSendHeaders {} -> ChainSendHeaders p `send` ch
         MAlert {} -> $(logWarn) $ lp <> "Deprecated " <> logMsg m
         MAddr (Addr as) -> managerNewPeers p as mgr
@@ -263,13 +261,13 @@ incoming m = do
                     | i <- is
                     , invType i == InvBlock || invType i == InvMerkleBlock
                     ]
-            forM_ ts $ liftIO . atomically . l . (,) p . TxAvail
+            forM_ ts (atomically . l . (,) p . TxAvail)
             unless (null bs) $ ChainNewBlocks p bs `send` ch
-        MTx tx -> liftIO . atomically $ l (p, GotTx tx)
-        MBlock b -> liftIO . atomically $ l (p, GotBlock b)
-        MMerkleBlock b -> liftIO . atomically $ l (p, GotMerkleBlock b)
+        MTx tx -> atomically (l (p, GotTx tx))
+        MBlock b -> atomically (l (p, GotBlock b))
+        MMerkleBlock b -> atomically (l (p, GotMerkleBlock b))
         MHeaders (Headers hcs) -> ChainNewHeaders p hcs `send` ch
-        MGetData (GetData d) -> liftIO . atomically $ l (p, SendData d)
+        MGetData (GetData d) -> atomically (l (p, SendData d))
         MNotFound (NotFound ns) -> do
             let f (InvVector InvTx hash) = Just (TxNotFound (TxHash hash))
                 f (InvVector InvBlock hash) =
@@ -278,11 +276,11 @@ incoming m = do
                     Just (BlockNotFound (BlockHash hash))
                 f _ = Nothing
                 events = mapMaybe f ns
-            liftIO . atomically $ mapM_ (l . (p, )) events
-        MGetBlocks g -> liftIO . atomically $ l (p, SendBlocks g)
-        MGetHeaders h -> liftIO . atomically $ l (p, SendHeaders h)
-        MReject r -> liftIO . atomically $ l (p, Rejected r)
-        MMempool -> liftIO . atomically $ l (p, WantMempool)
+            atomically (mapM_ (l . (p, )) events)
+        MGetBlocks g -> atomically (l (p, SendBlocks g))
+        MGetHeaders h -> atomically (l (p, SendHeaders h))
+        MReject r -> atomically (l (p, Rejected r))
+        MMempool -> atomically (l (p, WantMempool))
         MGetAddr -> managerGetAddr p mgr
         _ -> $(logWarn) $ lp <> "Ignoring message: " <> logMsg m
 

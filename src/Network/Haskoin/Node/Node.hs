@@ -19,10 +19,10 @@ node ::
        ( MonadLoggerIO m
        , MonadUnliftIO m
        )
-    => NodeConfig
+    => NodeConfig m
     -> m ()
 node cfg = do
-    psup <- Inbox <$> liftIO newTQueueIO
+    psup <- Inbox <$> newTQueueIO
     $(logInfo) $ logMe <> "Starting node"
     supervisor
         KillAll

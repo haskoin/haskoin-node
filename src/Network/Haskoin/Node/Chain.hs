@@ -99,7 +99,6 @@ chain ::
     -> m ()
 chain cfg = do
     st <-
-        liftIO $
         newTVarIO
             ChainState {syncingPeer = Nothing, mySynced = False, newPeers = []}
     let rd =
@@ -121,7 +120,7 @@ chain cfg = do
 processChainMessage :: MonadChain m => ChainMessage -> m ()
 processChainMessage (ChainNewHeaders p hcs) = do
     stb <- asks chainState
-    st <- liftIO $ readTVarIO stb
+    st <- readTVarIO stb
     let spM = syncingPeer st
     t <- computeTime
     bb <- getBestBlockHeader
@@ -133,7 +132,7 @@ processChainMessage (ChainNewHeaders p hcs) = do
             case spM of
                 Nothing -> do
                     bb' <- getBestBlockHeader
-                    liftIO . atomically . modifyTVar stb $ \s ->
+                    atomically . modifyTVar stb $ \s ->
                         s {newPeers = nub $ p : newPeers s}
                     syncHeaders bb' p
                 Just sp
@@ -141,11 +140,11 @@ processChainMessage (ChainNewHeaders p hcs) = do
                         $(logError) $ logMe <> "Syncing peer sent bad headers"
                         mgr <- chainConfManager <$> asks myConfig
                         managerKill PeerSentBadHeaders p mgr
-                        liftIO . atomically . modifyTVar stb $ \s ->
+                        atomically . modifyTVar stb $ \s ->
                             s {syncingPeer = Nothing}
                         processSyncQueue
                     | otherwise ->
-                        liftIO . atomically . modifyTVar stb $ \s ->
+                        atomically . modifyTVar stb $ \s ->
                             s {newPeers = nub $ p : newPeers s}
   where
     synced bb = do
@@ -153,7 +152,7 @@ processChainMessage (ChainNewHeaders p hcs) = do
             logMe <> "Headers synced to height " <>
             fromString (show (nodeHeight bb))
         st <- asks chainState
-        liftIO . atomically . modifyTVar st $ \s -> s {syncingPeer = Nothing}
+        atomically . modifyTVar st $ \s -> s {syncingPeer = Nothing}
         MSendHeaders `sendMessage` p
         processSyncQueue
     upeer bb = do
@@ -167,7 +166,7 @@ processChainMessage (ChainNewHeaders p hcs) = do
             mgr <- chainConfManager <$> asks myConfig
             managerSetBest bb' mgr
             l <- chainConfListener <$> asks myConfig
-            liftIO . atomically . l $ ChainNewBest bb'
+            atomically . l $ ChainNewBest bb'
         case length hcs of
             0 -> synced bb'
             2000 ->
@@ -178,7 +177,7 @@ processChainMessage (ChainNewHeaders p hcs) = do
                             syncHeaders (head bhs) p
                     _ -> do
                         st <- asks chainState
-                        liftIO . atomically . modifyTVar st $ \s ->
+                        atomically . modifyTVar st $ \s ->
                             s {newPeers = nub $ p : newPeers s}
             _ -> do
                 upeer $ head bhs
@@ -187,7 +186,7 @@ processChainMessage (ChainNewHeaders p hcs) = do
 processChainMessage (ChainNewPeer p) = do
     st <- asks chainState
     sp <-
-        liftIO . atomically $ do
+        atomically $ do
             modifyTVar st $ \s -> s {newPeers = nub $ p : newPeers s}
             syncingPeer <$> readTVar st
     case sp of
@@ -200,43 +199,39 @@ processChainMessage (ChainNewBlocks p _) = processChainMessage (ChainNewPeer p)
 processChainMessage (ChainRemovePeer p) = do
     st <- asks chainState
     sp <-
-        liftIO . atomically $ do
+        atomically $ do
             modifyTVar st $ \s -> s {newPeers = delete p (newPeers s)}
             syncingPeer <$> readTVar st
     case sp of
         Just p' ->
             when (p == p') $ do
-                liftIO . atomically . modifyTVar st $ \s ->
+                atomically . modifyTVar st $ \s ->
                     s {syncingPeer = Nothing}
                 processSyncQueue
         Nothing -> return ()
 
-processChainMessage (ChainGetBest reply) = do
-    b <- getBestBlockHeader
-    liftIO . atomically $ reply b
+processChainMessage (ChainGetBest reply) =
+    getBestBlockHeader >>= atomically . reply
 
-processChainMessage (ChainGetAncestor h n reply) = do
-    a <- getAncestor h n
-    liftIO . atomically $ reply a
+processChainMessage (ChainGetAncestor h n reply) =
+    getAncestor h n >>= atomically . reply
 
-processChainMessage (ChainGetSplit r l reply) = do
-    s <- splitPoint r l
-    liftIO . atomically $ reply s
+processChainMessage (ChainGetSplit r l reply) =
+    splitPoint r l >>= atomically . reply
 
-processChainMessage (ChainGetBlock h reply) = do
-    b <- getBlockHeader h
-    liftIO . atomically $ reply b
+processChainMessage (ChainGetBlock h reply) =
+    getBlockHeader h >>= atomically . reply
 
 processChainMessage (ChainSendHeaders _) = return ()
 
 processChainMessage (ChainIsSynced reply) = do
     st <- asks chainState
-    s <- liftIO $ mySynced <$> readTVarIO st
-    liftIO . atomically $ reply s
+    s <- mySynced <$> readTVarIO st
+    atomically (reply s)
 
 processSyncQueue :: MonadChain m => m ()
 processSyncQueue = do
-    s <- asks chainState >>= liftIO . readTVarIO
+    s <- asks chainState >>= readTVarIO
     when (isNothing (syncingPeer s)) $ getBestBlockHeader >>= go s
   where
     go s bb =
@@ -249,22 +244,22 @@ processSyncQueue = do
                     then unless (mySynced s) $ do
                              l <- chainConfListener <$> asks myConfig
                              st <- asks chainState
-                             liftIO . atomically $ do
-                                 l $ ChainSynced bb
+                             atomically $ do
+                                 l (ChainSynced bb)
                                  writeTVar st s {mySynced = True}
                     else do
                         l <- chainConfListener <$> asks myConfig
                         st <- asks chainState
-                        liftIO . atomically $ do
-                            l $ ChainNotSynced bb
+                        atomically $ do
+                            l (ChainNotSynced bb)
                             writeTVar st s {mySynced = False}
             p:_ -> syncHeaders bb p
 
 syncHeaders :: MonadChain m => BlockNode -> Peer -> m ()
 syncHeaders bb p = do
     st <- asks chainState
-    s <- liftIO $ readTVarIO st
-    liftIO . atomically . writeTVar st $
+    s <- readTVarIO st
+    atomically . writeTVar st $
         s {syncingPeer = Just p, newPeers = delete p (newPeers s)}
     loc <- blockLocator bb
     let m =

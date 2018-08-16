@@ -43,8 +43,12 @@ import           UnliftIO
 import           UnliftIO.Concurrent
 import           UnliftIO.Resource
 
-type MonadManager m
-     = (MonadLoggerIO m, MonadReader ManagerReader m)
+type MonadManager n m
+     = ( MonadUnliftIO n
+       , MonadLoggerIO n
+       , MonadUnliftIO m
+       , MonadLoggerIO m
+       , MonadReader (ManagerReader n) m)
 
 data OnlinePeer = OnlinePeer
     { onlinePeerAddress     :: !SockAddr
@@ -61,12 +65,12 @@ data OnlinePeer = OnlinePeer
     , onlinePeerPings       :: ![NominalDiffTime]
     }
 
-data ManagerReader = ManagerReader
+data ManagerReader n = ManagerReader
     { mySelf           :: !Manager
     , myChain          :: !Chain
-    , myConfig         :: !ManagerConfig
+    , myConfig         :: !(ManagerConfig n)
     , myPeerDB         :: !DB
-    , myPeerSupervisor :: !(Inbox SupervisorMessage)
+    , myPeerSupervisor :: !(PeerSupervisor n)
     , onlinePeers      :: !(TVar [OnlinePeer])
     , myBloomFilter    :: !(TVar (Maybe BloomFilter))
     , myBestBlock      :: !(TVar BlockNode)
@@ -141,17 +145,12 @@ instance Serialize PeerTimeAddress where
         S.put getPeerTimeAddress
     put PeerTimeAddressBase = S.putWord8 0x80
 
-manager ::
-       ( MonadUnliftIO m
-       , MonadLoggerIO m
-       )
-    => ManagerConfig
-    -> m ()
+manager :: (MonadUnliftIO m, MonadLoggerIO m) => ManagerConfig m -> m ()
 manager cfg = do
     bb <- chainGetBest $ mgrConfChain cfg
-    opb <- liftIO $ newTVarIO []
-    bfb <- liftIO $ newTVarIO Nothing
-    bbb <- liftIO $ newTVarIO bb
+    opb <- newTVarIO []
+    bfb <- newTVarIO Nothing
+    bbb <- newTVarIO bb
     withConnectLoop (mgrConfManager cfg) $ do
         let rd =
                 ManagerReader
@@ -170,7 +169,7 @@ manager cfg = do
         connectNewPeers
         managerLoop
 
-resolvePeers :: (MonadUnliftIO m, MonadManager m) => m [(SockAddr, Priority)]
+resolvePeers :: (MonadUnliftIO m, MonadManager n m) => m [(SockAddr, Priority)]
 resolvePeers = do
     cfg <- asks myConfig
     confPeers <-
@@ -218,7 +217,7 @@ decodeSockAddr = do
             p <- S.getWord16be
             return $ SockAddrInet6 (fromIntegral p) 0 (a, b, c, d) 0
 
-connectPeer :: MonadManager m => SockAddr -> m ()
+connectPeer :: MonadManager n m => SockAddr -> m ()
 connectPeer sa = do
     db <- asks myPeerDB
     let k = PeerAddress sa
@@ -231,7 +230,7 @@ connectPeer sa = do
                 db
                 [deleteOp v, insertOp v' k, insertOp k v']
 
-storePeer :: MonadManager m => SockAddr -> Priority -> m ()
+storePeer :: MonadManager n m => SockAddr -> Priority -> m ()
 storePeer sa prio = do
     db <- asks myPeerDB
     let k = PeerAddress sa
@@ -257,7 +256,7 @@ storePeer sa prio = do
         Just PeerTimeAddressBase ->
             error "Key for peer is corrupted"
 
-banPeer :: MonadManager m => SockAddr -> m ()
+banPeer :: MonadManager n m => SockAddr -> m ()
 banPeer sa = do
     db <- asks myPeerDB
     let k = PeerAddress sa
@@ -276,7 +275,7 @@ banPeer sa = do
                     db
                     [deleteOp v, insertOp k v', insertOp v' k]
 
-backoffPeer :: MonadManager m => SockAddr -> m ()
+backoffPeer :: MonadManager n m => SockAddr -> m ()
 backoffPeer sa = do
     db <- asks myPeerDB
     onlinePeers <- map onlinePeerAddress <$> getOnlinePeers
@@ -301,7 +300,7 @@ backoffPeer sa = do
                     db
                     [deleteOp v, insertOp k v', insertOp v' k]
 
-getNewPeer :: (MonadUnliftIO m, MonadManager m) => m (Maybe SockAddr)
+getNewPeer :: (MonadUnliftIO m, MonadManager n m) => m (Maybe SockAddr)
 getNewPeer = do
     ManagerConfig {..} <- asks myConfig
     online_peers <- map onlinePeerAddress <$> getOnlinePeers
@@ -317,7 +316,7 @@ getNewPeer = do
                 CC.find (not . (`elem` online_peers))
         else return $ find (not . (`elem` online_peers)) config_peers
 
-getConnectedPeers :: MonadManager m => m [OnlinePeer]
+getConnectedPeers :: MonadManager n m => m [OnlinePeer]
 getConnectedPeers = filter onlinePeerConnected <$> getOnlinePeers
 
 withConnectLoop :: (MonadUnliftIO m, MonadLoggerIO m) => Manager -> m a -> m a
@@ -329,7 +328,7 @@ withConnectLoop mgr f = withAsync go $ const f
             i <- liftIO (randomRIO (30, 90))
             threadDelay (i * 1000 * 1000)
 
-managerLoop :: (MonadUnliftIO m, MonadManager m) => m ()
+managerLoop :: (MonadUnliftIO m, MonadManager n m) => m ()
 managerLoop =
     forever $ do
         mgr <- asks mySelf
@@ -337,13 +336,12 @@ managerLoop =
         processManagerMessage msg
 
 processManagerMessage ::
-       (MonadUnliftIO m, MonadManager m) => ManagerMessage -> m ()
+       (MonadUnliftIO m, MonadManager n m) => ManagerMessage -> m ()
 
 processManagerMessage (ManagerSetFilter bf) = setFilter bf
 
-processManagerMessage (ManagerSetBest bb) = do
-    bbb <- asks myBestBlock
-    liftIO . atomically $ writeTVar bbb bb
+processManagerMessage (ManagerSetBest bb) =
+    asks myBestBlock >>= atomically . (`writeTVar` bb)
 
 processManagerMessage ManagerPing = connectNewPeers
 
@@ -378,10 +376,8 @@ processManagerMessage (ManagerSetPeerBest p bn) = modifyPeer f p
   where
     f op = op {onlinePeerBestBlock = bn}
 
-processManagerMessage (ManagerGetPeerBest p reply) = do
-    op <- findPeer p
-    let bn = fmap onlinePeerBestBlock op
-    liftIO . atomically $ reply bn
+processManagerMessage (ManagerGetPeerBest p reply) =
+    findPeer p >>= \op -> atomically (reply (fmap onlinePeerBestBlock op))
 
 processManagerMessage (ManagerSetPeerVersion p v) =
     modifyPeer f p >> findPeer p >>= \case
@@ -408,7 +404,7 @@ processManagerMessage (ManagerSetPeerVersion p v) =
     testVersion = do
         when (services v .&. nodeNetwork == 0) $ throwError NotNetworkPeer
         bfb <- asks myBloomFilter
-        bf <- liftIO $ readTVarIO bfb
+        bf <- readTVarIO bfb
         when (isJust bf && services v .&. nodeBloom == 0) $
             throwError BloomFiltersNotSupported
         myself <-
@@ -416,7 +412,7 @@ processManagerMessage (ManagerSetPeerVersion p v) =
         when myself $ throwError PeerIsMyself
     loadFilter = do
         bfb <- asks myBloomFilter
-        bf <- liftIO $ readTVarIO bfb
+        bf <- readTVarIO bfb
         case bf of
             Nothing -> return ()
             Just b  -> b `peerSetFilter` p
@@ -433,24 +429,23 @@ processManagerMessage (ManagerSetPeerVersion p v) =
                         logMe <> "Connected to " <>
                         logShow (onlinePeerAddress op)
                     l <- mgrConfMgrListener <$> asks myConfig
-                    liftIO . atomically . l $ ManagerConnect p
+                    atomically (l (ManagerConnect p))
                     ch <- asks myChain
                     chainNewPeer p ch
                     setPeerAnnounced p
 
-processManagerMessage (ManagerGetPeerVersion p reply) = do
-    v <- fmap onlinePeerVersion <$> findPeer p
-    liftIO . atomically $ reply v
+processManagerMessage (ManagerGetPeerVersion p reply) =
+    fmap onlinePeerVersion <$> findPeer p >>= atomically . reply
 
 processManagerMessage (ManagerGetPeers reply) =
-    getPeers >>= liftIO . atomically . reply
+    getPeers >>= atomically . reply
 
 processManagerMessage (ManagerPeerPing p i) =
     modifyPeer (\x -> x {onlinePeerPings = take 11 $ i : onlinePeerPings x}) p
 
 processManagerMessage (PeerStopped (p, _ex)) = do
     opb <- asks onlinePeers
-    m <- liftIO . atomically $ do
+    m <- atomically $ do
         m <- findPeerAsync p opb
         when (isJust m) $ removePeer p opb
         return m
@@ -460,7 +455,7 @@ processManagerMessage (PeerStopped (p, _ex)) = do
             processPeerOffline op
         Nothing -> return ()
 
-processPeerOffline :: MonadManager m => OnlinePeer -> m ()
+processPeerOffline :: MonadManager n m => OnlinePeer -> m ()
 processPeerOffline op
     | onlinePeerConnected op = do
         let p = onlinePeerMailbox op
@@ -468,18 +463,18 @@ processPeerOffline op
             logMe <> "Disconnected peer " <> logShow (onlinePeerAddress op)
         asks myChain >>= chainRemovePeer p
         l <- mgrConfMgrListener <$> asks myConfig
-        liftIO . atomically . l $ ManagerDisconnect p
+        atomically (l (ManagerDisconnect p))
     | otherwise =
         $(logWarn) $
         logMe <> "Could not connect to peer " <> logShow (onlinePeerAddress op)
 
-getPeers :: MonadManager m => m [Peer]
+getPeers :: MonadManager n m => m [Peer]
 getPeers = do
     ps <- getConnectedPeers
     return . map onlinePeerMailbox $
         sortBy (compare `on` median . onlinePeerPings) ps
 
-connectNewPeers :: (MonadUnliftIO m, MonadManager m) => m ()
+connectNewPeers :: MonadManager n m => m ()
 connectNewPeers = do
     mo <- mgrConfMaxPeers <$> asks myConfig
     ps <- getOnlinePeers
@@ -507,7 +502,7 @@ connectNewPeers = do
         pl <- mgrConfPeerListener <$> asks myConfig
         $(logInfo) $ logMe <> "Connecting to peer " <> logShow sa
         bbb <- asks myBestBlock
-        bb <- liftIO $ readTVarIO bbb
+        bb <- readTVarIO bbb
         nonce <- liftIO randomIO
         let pc =
                 PeerConfig
@@ -520,15 +515,14 @@ connectNewPeers = do
                 , peerConfNonce = nonce
                 }
         psup <- asks myPeerSupervisor
-        pmbox <- liftIO $ newTBQueueIO 100
+        pmbox <- newTBQueueIO 100
         uid <- liftIO newUnique
         let p = UniqueInbox {uniqueInbox = Inbox pmbox, uniqueId = uid}
-        lg <- askLoggerIO
-        a <- psup `addChild` (peer pc p `runLoggingT` lg)
+        a <- psup `addChild` peer pc p
         newPeerConnection sa nonce p a
 
 newPeerConnection ::
-       MonadManager m => SockAddr -> Word64 -> Peer -> Async () -> m ()
+       MonadManager n m => SockAddr -> Word64 -> Peer -> Async () -> m ()
 newPeerConnection sa nonce p a =
     addPeer
         OnlinePeer
@@ -546,16 +540,16 @@ newPeerConnection sa nonce p a =
         , onlinePeerPings = []
         }
 
-peerString :: MonadManager m => Peer -> m String
+peerString :: MonadManager n m => Peer -> m String
 peerString p = maybe "unknown" (show . onlinePeerAddress) <$> findPeer p
 
-setPeerAnnounced :: MonadManager m => Peer -> m ()
+setPeerAnnounced :: MonadManager n m => Peer -> m ()
 setPeerAnnounced = modifyPeer (\x -> x {onlinePeerConnected = True})
 
-setFilter :: MonadManager m => BloomFilter -> m ()
+setFilter :: MonadManager n m => BloomFilter -> m ()
 setFilter bl = do
     bfb <- asks myBloomFilter
-    liftIO . atomically . writeTVar bfb $ Just bl
+    atomically . writeTVar bfb $ Just bl
     ops <- getOnlinePeers
     forM_ ops $ \op ->
         when (onlinePeerConnected op) $
@@ -571,13 +565,13 @@ setFilter bl = do
 logMe :: IsString a => a
 logMe = "[Manager] "
 
-findPeer :: MonadManager m => Peer -> m (Maybe OnlinePeer)
+findPeer :: MonadManager n m => Peer -> m (Maybe OnlinePeer)
 findPeer p = find ((== p) . onlinePeerMailbox) <$> getOnlinePeers
 
 findPeerAsync :: Async () -> TVar [OnlinePeer] -> STM (Maybe OnlinePeer)
 findPeerAsync a t = find ((== a) . onlinePeerAsync) <$> readTVar t
 
-modifyPeer :: MonadManager m => (OnlinePeer -> OnlinePeer) -> Peer -> m ()
+modifyPeer :: MonadManager n m => (OnlinePeer -> OnlinePeer) -> Peer -> m ()
 modifyPeer f p = modifyOnlinePeers $ map upd
   where
     upd op =
@@ -585,7 +579,7 @@ modifyPeer f p = modifyOnlinePeers $ map upd
             then f op
             else op
 
-addPeer :: MonadManager m => OnlinePeer -> m ()
+addPeer :: MonadManager n m => OnlinePeer -> m ()
 addPeer op = modifyOnlinePeers $ nubBy f . (op :)
   where
     f = (==) `on` onlinePeerMailbox
@@ -593,11 +587,11 @@ addPeer op = modifyOnlinePeers $ nubBy f . (op :)
 removePeer :: Async () -> TVar [OnlinePeer] -> STM ()
 removePeer a t = modifyTVar t $ filter ((/= a) . onlinePeerAsync)
 
-getOnlinePeers :: MonadManager m => m [OnlinePeer]
-getOnlinePeers = asks onlinePeers >>= liftIO . atomically . readTVar
+getOnlinePeers :: MonadManager n m => m [OnlinePeer]
+getOnlinePeers = asks onlinePeers >>= atomically . readTVar
 
-modifyOnlinePeers :: MonadManager m => ([OnlinePeer] -> [OnlinePeer]) -> m ()
-modifyOnlinePeers f = asks onlinePeers >>= liftIO . atomically . (`modifyTVar` f)
+modifyOnlinePeers :: MonadManager n m => ([OnlinePeer] -> [OnlinePeer]) -> m ()
+modifyOnlinePeers f = asks onlinePeers >>= atomically . (`modifyTVar` f)
 
 median :: Fractional a => [a] -> Maybe a
 median ls
