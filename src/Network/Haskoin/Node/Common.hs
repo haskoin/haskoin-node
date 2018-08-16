@@ -301,7 +301,7 @@ buildVersion nonce height loc rmt = do
         , verNonce = nonce
         , userAgent = VarString haskoinUserAgent
         , startHeight = height
-        , relay = False
+        , relay = True
         }
 
 chainNewPeer :: MonadIO m => Peer -> Chain -> m ()
