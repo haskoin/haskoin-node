@@ -3,7 +3,7 @@ extra-deps:
 - git: https://github.com/haskoin/haskoin-core.git
   commit: f2c8d75c44fbdd88a194d3753df395eb0e5b8fd6
 - git: https://github.com/xenog/nqe.git
-  commit: cb54d0b5ee17a1ae67381a5b8242e60258c73c29
+  commit: d93eebf1cce5fd58079be587dee78b50455e2a9c
 - git: https://github.com/xenog/rocksdb-query.git
   commit: e34aca0fe90264dd9aa62d0e081e6e7f4e3a8559
 - rocksdb-haskell-1.0.1
