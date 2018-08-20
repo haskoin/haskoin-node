@@ -261,7 +261,7 @@ incoming m = do
                     | i <- is
                     , invType i == InvBlock || invType i == InvMerkleBlock
                     ]
-            forM_ ts (atomically . l . (,) p . TxAvail)
+            unless (null ts) $ atomically $ l (p, TxAvail ts)
             unless (null bs) $ ChainNewBlocks p bs `send` ch
         MTx tx -> atomically (l (p, GotTx tx))
         MBlock b -> atomically (l (p, GotBlock b))

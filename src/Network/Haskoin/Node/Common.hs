@@ -167,7 +167,7 @@ data PeerException
 instance Exception PeerException
 
 data PeerEvent
-    = TxAvail !TxHash
+    = TxAvail ![TxHash]
     | GotBlock !Block
     | GotMerkleBlock !MerkleBlock
     | GotTx !Tx
