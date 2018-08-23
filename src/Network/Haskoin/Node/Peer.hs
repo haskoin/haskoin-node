@@ -14,6 +14,7 @@ import           Control.Concurrent.NQE
 import           Control.Monad
 import           Control.Monad.Logger
 import           Control.Monad.Reader
+import           Data.Bits
 import           Data.ByteString             (ByteString)
 import qualified Data.ByteString             as BS
 import qualified Data.ByteString.Char8       as C8
@@ -27,6 +28,7 @@ import           Data.String
 import           Data.Time.Clock
 import           Data.Word
 import           Network.Haskoin.Block
+import           Network.Haskoin.Constants
 import           Network.Haskoin.Network
 import           Network.Haskoin.Node.Common
 import           Network.Haskoin.Transaction
@@ -97,19 +99,28 @@ handshake = do
     bb <- chainGetBest ch
     ver <- buildVersion nonce (nodeHeight bb) loc rmt
     yield $ MVersion ver
-    v <- lift (remoteVer p)
-    yield MVerAck
-    lift (remoteVerAck p)
-    mgr <- peerConfManager <$> asks myConfig
-    managerSetPeerVersion p v mgr
+    lift (remoteVer p) >>= \case
+        v
+            | testSegWit v -> do
+                yield MVerAck
+                lift (remoteVerAck p)
+                mgr <- peerConfManager <$> asks myConfig
+                managerSetPeerVersion p v mgr
+            | otherwise -> do
+                yield . MReject $
+                    reject MCVersion RejectObsolete "No SegWit support"
+                throwIO PeerNoSegWit
   where
+    testSegWit v
+        | segWit = services v `testBit` 3
+        | otherwise = True
     remoteVer p = do
         m <-
             timeout time . receiveMatch p $ \case
                 PeerIncoming (MVersion v) -> Just v
                 _ -> Nothing
         case m of
-            Just v  -> return v
+            Just v -> return v
             Nothing -> throwIO PeerTimeout
     remoteVerAck p = do
         m <-

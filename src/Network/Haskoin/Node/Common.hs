@@ -161,6 +161,7 @@ data PeerException
     | BloomFiltersNotSupported
     | PeerSentBadHeaders
     | NotNetworkPeer
+    | PeerNoSegWit
     | PeerTimeout
     deriving (Eq, Show)
 

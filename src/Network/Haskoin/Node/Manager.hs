@@ -506,7 +506,7 @@ connectNewPeers = do
         nonce <- liftIO randomIO
         let pc =
                 PeerConfig
-                { peerConfConnect = NetworkAddress 0 sa
+                { peerConfConnect = NetworkAddress srv sa
                 , peerConfInitBest = bb
                 , peerConfLocal = ad
                 , peerConfManager = mgr
@@ -520,6 +520,8 @@ connectNewPeers = do
         let p = UniqueInbox {uniqueInbox = Inbox pmbox, uniqueId = uid}
         a <- psup `addChild` peer pc p
         newPeerConnection sa nonce p a
+    srv | segWit = 8
+        | otherwise = 0
 
 newPeerConnection ::
        MonadManager n m => SockAddr -> Word64 -> Peer -> Async () -> m ()
