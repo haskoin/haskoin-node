@@ -272,7 +272,9 @@ peerGetBlocks ::
        MonadIO m => Peer -> [BlockHash] -> m ()
 peerGetBlocks p bhs = PeerOutgoing (MGetData (GetData ivs)) `send` p
   where
-    ivs = map (InvVector InvBlock . getBlockHash) bhs
+    con | segWit = InvWitnessBlock
+        | otherwise = InvBlock
+    ivs = map (InvVector con . getBlockHash) bhs
 
 peerGetTxs ::
        MonadIO m
@@ -281,7 +283,9 @@ peerGetTxs ::
     -> m ()
 peerGetTxs p ths = PeerOutgoing (MGetData (GetData ivs)) `send` p
   where
-    ivs = map (InvVector InvTx . getTxHash) ths
+    con | segWit = InvWitnessTx
+        | otherwise = InvTx
+    ivs = map (InvVector con . getTxHash) ths
 
 buildVersion ::
        MonadIO m

@@ -180,14 +180,20 @@ registerOutgoing (MGetData (GetData ivs)) = do
         fmap catMaybes . forM ivs $ \iv ->
             case toPending iv of
                 Nothing -> return Nothing
-                Just p  -> return $ Just (p, cur)
+                Just p -> return $ Just (p, cur)
     atomically (modifyTVar pbox (++ ms))
   where
     toPending InvVector {invType = InvTx, invHash = hash} =
         Just (PendingTx (TxHash hash))
+    toPending InvVector {invType = InvWitnessTx, invHash = hash} =
+        Just (PendingTx (TxHash hash))
     toPending InvVector {invType = InvBlock, invHash = hash} =
         Just (PendingBlock (BlockHash hash))
+    toPending InvVector {invType = InvWitnessBlock, invHash = hash} =
+        Just (PendingBlock (BlockHash hash))
     toPending InvVector {invType = InvMerkleBlock, invHash = hash} =
+        Just (PendingMerkle (BlockHash hash))
+    toPending InvVector {invType = InvWitnessMerkleBlock, invHash = hash} =
         Just (PendingMerkle (BlockHash hash))
     toPending _ = Nothing
 registerOutgoing MGetHeaders {} = do
@@ -201,12 +207,16 @@ registerIncoming (MNotFound (NotFound ivs)) =
     asks myPending >>= \pbox ->
         atomically (modifyTVar pbox (filter (matchNotFound . fst)))
   where
-    matchNotFound (PendingTx (TxHash hash)) = InvVector InvTx hash `notElem` ivs
+    matchNotFound (PendingTx (TxHash hash)) =
+        InvVector InvTx hash `notElem` ivs &&
+        InvVector InvWitnessTx hash `notElem` ivs
     matchNotFound (PendingBlock (BlockHash hash)) =
-        InvVector InvBlock hash `notElem` ivs
+        InvVector InvBlock hash `notElem` ivs &&
+        InvVector InvWitnessBlock hash `notElem` ivs
     matchNotFound (PendingMerkle (BlockHash hash)) =
         InvVector InvBlock hash `notElem` ivs &&
-        InvVector InvMerkleBlock hash `notElem` ivs
+        InvVector InvMerkleBlock hash `notElem` ivs &&
+        InvVector InvWitnessMerkleBlock hash `notElem` ivs
     matchNotFound _ = False
 registerIncoming (MTx t) =
     asks myPending >>= \pbox ->
@@ -281,9 +291,15 @@ incoming m = do
         MGetData (GetData d) -> atomically (l (p, SendData d))
         MNotFound (NotFound ns) -> do
             let f (InvVector InvTx hash) = Just (TxNotFound (TxHash hash))
+                f (InvVector InvWitnessTx hash) =
+                    Just (TxNotFound (TxHash hash))
                 f (InvVector InvBlock hash) =
                     Just (BlockNotFound (BlockHash hash))
+                f (InvVector InvWitnessBlock hash) =
+                    Just (BlockNotFound (BlockHash hash))
                 f (InvVector InvMerkleBlock hash) =
+                    Just (BlockNotFound (BlockHash hash))
+                f (InvVector InvWitnessMerkleBlock hash) =
                     Just (BlockNotFound (BlockHash hash))
                 f _ = Nothing
                 events = mapMaybe f ns

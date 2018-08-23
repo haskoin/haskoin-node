@@ -1,8 +1,8 @@
--- This file has been generated from package.yaml by hpack version 0.20.0.
+-- This file has been generated from package.yaml by hpack version 0.28.2.
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 89afeaff0b22f378634b699defaaca829f0a158d2ab05dbd1dc8cc75e871bd4c
+-- hash: 66b96f0f37e7b393b334ff815ad26c56f5fcdc583bd30cb5d417ae6023b5aefb
 
 name:           haskoin-node
 version:        1.0.0
@@ -17,7 +17,6 @@ license:        PublicDomain
 license-file:   UNLICENSE
 build-type:     Simple
 cabal-version:  >= 1.10
-
 extra-source-files:
     CHANGELOG.md
     README.md
