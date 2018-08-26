@@ -185,9 +185,6 @@ data PeerMessage
     = PeerOutgoing !Message
     | PeerIncoming !Message
 
-logShow :: (Show a, IsString b) => a -> b
-logShow = fromString . show
-
 toSockAddr :: (MonadUnliftIO m) => HostPort -> m [SockAddr]
 toSockAddr (host, port) = go `catch` e
   where

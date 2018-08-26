@@ -25,6 +25,7 @@ import           Data.Conduit.Network
 import           Data.Maybe
 import           Data.Serialize
 import           Data.String
+import           Data.String.Conversions
 import           Data.Time.Clock
 import           Data.Word
 import           Network.Haskoin.Block
@@ -59,8 +60,9 @@ time = 15 * 1000 * 1000
 logMsg :: IsString a => Message -> a
 logMsg = fromString . msgType
 
-logPeer :: (Semigroup a, IsString a) => SockAddr -> a
-logPeer sa = "[Peer " <> logShow sa <> "] "
+logPeer ::
+       (ConvertibleStrings String a, Semigroup a, IsString a) => SockAddr -> a
+logPeer sa = "[Peer " <> cs (show sa) <> "] "
 
 peer :: (MonadUnliftIO m, MonadLoggerIO m) => PeerConfig -> Peer -> m ()
 peer pc p =
@@ -120,7 +122,7 @@ handshake = do
                 PeerIncoming (MVersion v) -> Just v
                 _ -> Nothing
         case m of
-            Just v -> return v
+            Just v  -> return v
             Nothing -> throwIO PeerTimeout
     remoteVerAck p = do
         m <-
@@ -159,7 +161,7 @@ exchangePing = do
             t2 <- liftIO getCurrentTime
             let d = t2 `diffUTCTime` t1
             $(logDebug) $
-                lp <> "Roundtrip: " <> logShow (d * 1000) <> " ms"
+                lp <> "Roundtrip: " <> cs (show (d * 1000)) <> " ms"
             ManagerPeerPing me d `send` mgr
 
 checkStale :: MonadPeer m => ConduitM () Message m ()
@@ -180,7 +182,7 @@ registerOutgoing (MGetData (GetData ivs)) = do
         fmap catMaybes . forM ivs $ \iv ->
             case toPending iv of
                 Nothing -> return Nothing
-                Just p -> return $ Just (p, cur)
+                Just p  -> return $ Just (p, cur)
     atomically (modifyTVar pbox (++ ms))
   where
     toPending InvVector {invType = InvTx, invHash = hash} =
@@ -249,7 +251,13 @@ processMessage m = do
             lift (registerIncoming msg)
             incoming msg
 
-logMe :: (Semigroup a, IsString a, MonadReader PeerReader m) => m a
+logMe ::
+       ( ConvertibleStrings String a
+       , Semigroup a
+       , IsString a
+       , MonadReader PeerReader m
+       )
+    => m a
 logMe = logPeer <$> asks mySockAddr
 
 incoming :: MonadPeer m => Message -> ConduitT () Message m ()

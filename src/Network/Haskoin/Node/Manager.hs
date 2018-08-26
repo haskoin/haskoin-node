@@ -28,6 +28,7 @@ import           Data.Maybe
 import           Data.Serialize              (Get, Put, Serialize, get, put)
 import qualified Data.Serialize              as S
 import           Data.String
+import           Data.String.Conversions
 import           Data.Time.Clock
 import           Data.Word
 import           Database.RocksDB            (DB)
@@ -270,7 +271,7 @@ banPeer sa = do
                     , getPeerNextConnect = now + 6 * 60 * 60
                     }
             when (getPeerPrio v == PriorityNetwork) $ do
-                $(logWarn) $ logMe <> "Banning peer " <> logShow sa
+                $(logWarn) $ logMe <> "Banning peer " <> cs (show sa)
                 writeBatch
                     db
                     [deleteOp v, insertOp k v', insertOp v' k]
@@ -293,12 +294,10 @@ backoffPeer sa = do
                 v' = v {getPeerNextConnect = t}
             when (getPeerPrio v == PriorityNetwork) $ do
                 $(logWarn) $
-                    logMe <> "Backing off peer " <> logShow sa <> " for " <>
-                    logShow r <>
+                    logMe <> "Backing off peer " <> cs (show sa) <> " for " <>
+                    cs (show r) <>
                     " seconds"
-                writeBatch
-                    db
-                    [deleteOp v, insertOp k v', insertOp v' k]
+                writeBatch db [deleteOp v, insertOp k v', insertOp v' k]
 
 getNewPeer :: (MonadUnliftIO m, MonadManager n m) => m (Maybe SockAddr)
 getNewPeer = do
@@ -356,7 +355,7 @@ processManagerMessage (ManagerNewPeers p as) =
             | otherwise -> do
                 pn <- peerString p
                 $(logInfo) $
-                    logMe <> "Received " <> logShow (length as) <>
+                    logMe <> "Received " <> cs (show (length as)) <>
                     " peers from " <>
                     fromString pn
                 forM_ as $ \(_, na) ->
@@ -368,7 +367,7 @@ processManagerMessage (ManagerKill e p) =
         Nothing -> return ()
         Just op -> do
             $(logError) $
-                logMe <> "Killing peer " <> logShow (onlinePeerAddress op)
+                logMe <> "Killing peer " <> cs (show (onlinePeerAddress op))
             banPeer $ onlinePeerAddress op
             onlinePeerAsync op `cancelWith` e
 
@@ -427,7 +426,7 @@ processManagerMessage (ManagerSetPeerVersion p v) =
                 | otherwise -> do
                     $(logInfo) $
                         logMe <> "Connected to " <>
-                        logShow (onlinePeerAddress op)
+                        cs (show (onlinePeerAddress op))
                     l <- mgrConfMgrListener <$> asks myConfig
                     atomically (l (ManagerConnect p))
                     ch <- asks myChain
@@ -460,13 +459,13 @@ processPeerOffline op
     | onlinePeerConnected op = do
         let p = onlinePeerMailbox op
         $(logWarn) $
-            logMe <> "Disconnected peer " <> logShow (onlinePeerAddress op)
+            logMe <> "Disconnected peer " <> cs (show (onlinePeerAddress op))
         asks myChain >>= chainRemovePeer p
         l <- mgrConfMgrListener <$> asks myConfig
         atomically (l (ManagerDisconnect p))
     | otherwise =
         $(logWarn) $
-        logMe <> "Could not connect to peer " <> logShow (onlinePeerAddress op)
+        logMe <> "Could not connect to peer " <> cs (show (onlinePeerAddress op))
 
 getPeers :: MonadManager n m => m [Peer]
 getPeers = do
@@ -486,8 +485,8 @@ connectNewPeers = do
             mapM_ (uncurry storePeer) ps'
         _ ->
             $(logInfo) $
-            logMe <> "Peers connected: " <> logShow (length ps) <> "/" <>
-            logShow mo
+            logMe <> "Peers connected: " <> cs (show (length ps)) <> "/" <>
+            cs (show mo)
     go n
   where
     go 0 = return ()
@@ -500,7 +499,7 @@ connectNewPeers = do
         mgr <- asks mySelf
         ch <- asks myChain
         pl <- mgrConfPeerListener <$> asks myConfig
-        $(logInfo) $ logMe <> "Connecting to peer " <> logShow sa
+        $(logInfo) $ logMe <> "Connecting to peer " <> cs (show sa)
         bbb <- asks myBestBlock
         bb <- readTVarIO bbb
         nonce <- liftIO randomIO
@@ -520,7 +519,8 @@ connectNewPeers = do
         let p = UniqueInbox {uniqueInbox = Inbox pmbox, uniqueId = uid}
         a <- psup `addChild` peer pc p
         newPeerConnection sa nonce p a
-    srv | segWit = 8
+    srv
+        | segWit = 8
         | otherwise = 0
 
 newPeerConnection ::
@@ -559,7 +559,7 @@ setFilter bl = do
             then bl `peerSetFilter` onlinePeerMailbox op
             else do
                 $(logError) $
-                    logMe <> "Peer " <> logShow (onlinePeerAddress op) <>
+                    logMe <> "Peer " <> cs (show (onlinePeerAddress op)) <>
                     "does not support bloom filters"
                 banPeer (onlinePeerAddress op)
                 onlinePeerAsync op `cancelWith` BloomFiltersNotSupported

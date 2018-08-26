@@ -26,6 +26,7 @@ dependencies:
 - random
 - resourcet
 - rocksdb-query
+- string-conversions
 - unliftio
 library:
   source-dirs: src

@@ -2,7 +2,7 @@
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 66b96f0f37e7b393b334ff815ad26c56f5fcdc583bd30cb5d417ae6023b5aefb
+-- hash: 88d3d1726cf4c664d56193817bc629dedb101e5083a9f98e1b9fe9fbf6423ae0
 
 name:           haskoin-node
 version:        1.0.0
@@ -44,6 +44,7 @@ library
     , resourcet
     , rocksdb-haskell
     , rocksdb-query
+    , string-conversions
     , time
     , unique
     , unliftio
@@ -79,6 +80,7 @@ test-suite haskoin-node-test
     , resourcet
     , rocksdb-haskell
     , rocksdb-query
+    , string-conversions
     , unliftio
   other-modules:
       Paths_haskoin_node

@@ -18,10 +18,11 @@ import           Control.Monad.Logger
 import           Control.Monad.Reader
 import qualified Data.ByteString             as BS
 import           Data.Either
-import           Data.List                   (nub, delete)
+import           Data.List                   (delete, nub)
 import           Data.Maybe
 import           Data.Serialize
 import           Data.String
+import           Data.String.Conversions
 import           Database.RocksDB            (DB)
 import qualified Database.RocksDB            as RocksDB
 import           Database.RocksDB.Query
@@ -128,7 +129,7 @@ processChainMessage (ChainNewHeaders p hcs) = do
     case bhsE of
         Right bhs -> conn bb bhs spM
         Left e -> do
-            $(logWarn) $ logMe <> "Could not connect headers: " <> fromString e
+            $(logWarn) $ logMe <> "Could not connect headers: " <> cs e
             case spM of
                 Nothing -> do
                     bb' <- getBestBlockHeader
@@ -149,8 +150,7 @@ processChainMessage (ChainNewHeaders p hcs) = do
   where
     synced bb = do
         $(logInfo) $
-            logMe <> "Headers synced to height " <>
-            fromString (show (nodeHeight bb))
+            logMe <> "Headers synced to height " <> cs (show (nodeHeight bb))
         st <- asks chainState
         atomically . modifyTVar st $ \s -> s {syncingPeer = Nothing}
         MSendHeaders `sendMessage` p
@@ -162,7 +162,7 @@ processChainMessage (ChainNewHeaders p hcs) = do
         bb' <- getBestBlockHeader
         when (bb /= bb') $ do
             $(logInfo) $
-                logMe <> "Best header at height " <> logShow (nodeHeight bb')
+                logMe <> "Best header at height " <> cs (show (nodeHeight bb'))
             mgr <- chainConfManager <$> asks myConfig
             managerSetBest bb' mgr
             l <- chainConfListener <$> asks myConfig
@@ -191,7 +191,7 @@ processChainMessage (ChainNewPeer p) = do
             syncingPeer <$> readTVar st
     case sp of
         Nothing -> processSyncQueue
-        Just _ -> return ()
+        Just _  -> return ()
 
 -- Getting a new block should trigger an action equivalent to getting a new peer
 processChainMessage (ChainNewBlocks p _) = processChainMessage (ChainNewPeer p)
