@@ -31,10 +31,10 @@ data TestNode = TestNode
 
 main :: IO ()
 main = do
-    setBTCtest
+    let net = btcTest
     hspec . describe "peer-to-peer client" $ do
         it "connects to a peer" $
-            withTestNode "connect-one-peer" $ \TestNode {..} -> do
+            withTestNode net "connect-one-peer" $ \TestNode {..} -> do
                 p <-
                     receiveMatch testEvents $ \case
                         ManagerEvent (ManagerConnect p) -> Just p
@@ -46,9 +46,9 @@ main = do
                 bb <-
                     fromMaybe (error "No best block") <$>
                     managerGetPeerBest p testMgr
-                bb `shouldBe` genesisNode
+                bb `shouldBe` genesisNode net
         it "downloads some blocks" $
-            withTestNode "get-blocks" $ \TestNode {..} -> do
+            withTestNode net "get-blocks" $ \TestNode {..} -> do
                 let hs = [h1, h2]
                     h1 =
                         "000000000babf10e26f6cba54d9c282983f1d1ce7061f7e875b58f8ca47db932"
@@ -58,7 +58,7 @@ main = do
                     receiveMatch testEvents $ \case
                         ManagerEvent (ManagerConnect p) -> Just p
                         _ -> Nothing
-                peerGetBlocks p hs
+                peerGetBlocks net p hs
                 b1 <-
                     receiveMatch testEvents $ \case
                         PeerEvent (p', GotBlock b)
@@ -77,8 +77,10 @@ main = do
                 testMerkle b1
                 testMerkle b2
         it "downloads some merkle blocks" $
-            withTestNode "get-merkle-blocks" $ \TestNode {..} -> do
-                let a = "mgpS4Zis8iwNhriKMro1QSGDAbY6pqzRtA"
+            withTestNode net "get-merkle-blocks" $ \TestNode {..} -> do
+                let a =
+                        fromJust $
+                        stringToAddr net "mgpS4Zis8iwNhriKMro1QSGDAbY6pqzRtA"
                     k :: PubKeyC
                     k =
                         "02c3cface1777c70251cb206f7c80cabeae195dfbeeff0767cbd2a58d22be383da"
@@ -108,11 +110,11 @@ main = do
                             | p == p' -> Just b
                         _ -> Nothing
                 liftIO $ do
-                    a `shouldBe` pubKeyAddr k
-                    b1 `shouldSatisfy` testMerkleRoot
-                    b2 `shouldSatisfy` testMerkleRoot
+                    a `shouldBe` pubKeyAddr net k
+                    b1 `shouldSatisfy` testMerkleRoot net
+                    b2 `shouldSatisfy` testMerkleRoot net
         it "connects to multiple peers" $
-            withTestNode "connect-peers" $ \TestNode {..} -> do
+            withTestNode net "connect-peers" $ \TestNode {..} -> do
                 replicateM_ 3 $ do
                     pc <- receive testEvents
                     case pc of
@@ -122,7 +124,7 @@ main = do
                 ps <- managerGetPeers testMgr
                 length ps `shouldSatisfy` (>= 2)
         it "connects and syncs some headers" $
-            withTestNode "connect-sync" $ \TestNode {..} -> do
+            withTestNode net "connect-sync" $ \TestNode {..} -> do
                 let h =
                         "000000009ec921df4bb16aedd11567e27ede3c0b63835b257475d64a059f102b"
                     hs =
@@ -142,14 +144,14 @@ main = do
                 nodeHeight bb `shouldSatisfy` (>= 6000)
                 headerHash (nodeHeader an) `shouldBe` h
         it "downloads a single block" $
-            withTestNode "download-block" $ \TestNode {..} -> do
+            withTestNode net "download-block" $ \TestNode {..} -> do
                 let h =
                         "000000009ec921df4bb16aedd11567e27ede3c0b63835b257475d64a059f102b"
                 p <-
                     receiveMatch testEvents $ \case
                         ManagerEvent (ManagerConnect p) -> Just p
                         _ -> Nothing
-                peerGetBlocks p [h]
+                peerGetBlocks net p [h]
                 b <-
                     receiveMatch testEvents $ \case
                         PeerEvent (p', GotBlock b)
@@ -157,7 +159,7 @@ main = do
                         _ -> Nothing
                 headerHash (blockHeader b) `shouldBe` h
         it "attempts to get inexistent things" $
-            withTestNode "download-fail" $ \TestNode {..} -> do
+            withTestNode net "download-fail" $ \TestNode {..} -> do
                 let h =
                         TxHash .
                         fromRight (error "We will, we will rock you!") . decode $
@@ -166,7 +168,7 @@ main = do
                     receiveMatch testEvents $ \case
                         ManagerEvent (ManagerConnect p) -> Just p
                         _ -> Nothing
-                peerGetTxs p [h]
+                peerGetTxs net p [h]
                 n <-
                     receiveMatch testEvents $ \case
                         PeerEvent (p', TxNotFound n)
@@ -174,7 +176,7 @@ main = do
                         _ -> Nothing
                 n `shouldBe` h
         it "downloads some block parents" $
-            withTestNode "parents" $ \TestNode {..} -> do
+            withTestNode net "parents" $ \TestNode {..} -> do
                 let hs =
                         [ "00000000c74a24e1b1f2c04923c514ed88fc785cf68f52ed0ccffd3c6fe3fbd9"
                         , "000000007e5c5f40e495186ac4122f2e4ee25788cc36984a5760c55ecb376cb1"
@@ -192,10 +194,11 @@ main = do
 
 withTestNode ::
        (MonadUnliftIO m)
-    => String
+    => Network
+    -> String
     -> (TestNode -> m ())
     -> m ()
-withTestNode t f =
+withTestNode net t f =
     runNoLoggingT . withSystemTempDirectory ("haskoin-node-test-" <> t <> "-") $ \w -> do
         events <- Inbox <$> liftIO newTQueueIO
         ch <- Inbox <$> liftIO newTQueueIO
@@ -219,6 +222,7 @@ withTestNode t f =
                 , nodeSupervisor = ns
                 , nodeChain = ch
                 , nodeManager = mgr
+                , nodeNet = net
                 }
         withAsync (node cfg) $ \nd -> do
             link nd

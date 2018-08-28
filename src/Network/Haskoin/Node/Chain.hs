@@ -75,7 +75,7 @@ instance (Monad m, MonadLoggerIO m, MonadReader ChainReader m) =>
     addBlockHeader bn = do
         db <- asks headerDB
         insert db (BlockHeaderKey (headerHash (nodeHeader bn))) bn
-    getBlockHeader bh = do
+    getBlockHeader net bh = do
         db <- asks headerDB
         retrieve db Nothing (BlockHeaderKey bh)
     getBestBlockHeader = do
@@ -107,12 +107,13 @@ chain cfg = do
             {myConfig = cfg, headerDB = chainConfDB cfg, chainState = st}
     run `runReaderT` rd
   where
+    net = chainConfNetwork cfg
     run = do
-        let gs = encode genesisNode
+        let gs = encode (genesisNode net)
         db <- asks headerDB
         m <- RocksDB.get db RocksDB.defaultReadOptions (BS.singleton 0x91)
         when (isNothing m) $ do
-            addBlockHeader genesisNode
+            addBlockHeader (genesisNode net)
             RocksDB.put db RocksDB.defaultWriteOptions (BS.singleton 0x91) gs
         forever $ do
             msg <- receive $ chainConfChain cfg
@@ -122,10 +123,11 @@ processChainMessage :: MonadChain m => ChainMessage -> m ()
 processChainMessage (ChainNewHeaders p hcs) = do
     stb <- asks chainState
     st <- readTVarIO stb
+    net <- chainConfNetwork <$> asks myConfig
     let spM = syncingPeer st
     t <- computeTime
     bb <- getBestBlockHeader
-    bhsE <- connectBlocks t (map fst hcs)
+    bhsE <- connectBlocks net t (map fst hcs)
     case bhsE of
         Right bhs -> conn bb bhs spM
         Left e -> do
@@ -213,14 +215,17 @@ processChainMessage (ChainRemovePeer p) = do
 processChainMessage (ChainGetBest reply) =
     getBestBlockHeader >>= atomically . reply
 
-processChainMessage (ChainGetAncestor h n reply) =
-    getAncestor h n >>= atomically . reply
+processChainMessage (ChainGetAncestor h n reply) = do
+    net <- chainConfNetwork <$> asks myConfig
+    getAncestor net h n >>= atomically . reply
 
-processChainMessage (ChainGetSplit r l reply) =
-    splitPoint r l >>= atomically . reply
+processChainMessage (ChainGetSplit r l reply) = do
+    net <- chainConfNetwork <$> asks myConfig
+    splitPoint net r l >>= atomically . reply
 
-processChainMessage (ChainGetBlock h reply) =
-    getBlockHeader h >>= atomically . reply
+processChainMessage (ChainGetBlock h reply) = do
+    net <- chainConfNetwork <$> asks myConfig
+    getBlockHeader net h >>= atomically . reply
 
 processChainMessage (ChainSendHeaders _) = return ()
 
@@ -259,9 +264,10 @@ syncHeaders :: MonadChain m => BlockNode -> Peer -> m ()
 syncHeaders bb p = do
     st <- asks chainState
     s <- readTVarIO st
+    net <- chainConfNetwork <$> asks myConfig
     atomically . writeTVar st $
         s {syncingPeer = Just p, newPeers = delete p (newPeers s)}
-    loc <- blockLocator bb
+    loc <- blockLocator net bb
     let m =
             MGetHeaders
                 GetHeaders

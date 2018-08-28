@@ -63,6 +63,7 @@ data NodeConfig m = NodeConfig
     , nodeSupervisor :: !(NodeSupervisor m)
     , nodeChain      :: !Chain
     , nodeManager    :: !Manager
+    , nodeNet        :: !Network
     }
 
 data ManagerConfig m = ManagerConfig
@@ -76,6 +77,7 @@ data ManagerConfig m = ManagerConfig
     , mgrConfManager        :: !Manager
     , mgrConfChain          :: !Chain
     , mgrConfPeerSupervisor :: !(PeerSupervisor m)
+    , mgrConfNetwork        :: !Network
     }
 
 data NodeEvent
@@ -114,6 +116,7 @@ data ChainConfig = ChainConfig
     , chainConfListener :: !(Listen ChainEvent)
     , chainConfManager  :: !Manager
     , chainConfChain    :: !Chain
+    , chainConfNetwork  :: !Network
     }
 
 data ChainMessage
@@ -148,6 +151,7 @@ data PeerConfig = PeerConfig
     , peerConfChain    :: !Chain
     , peerConfListener :: !(Listen (Peer, PeerEvent))
     , peerConfNonce    :: !Word64
+    , peerConfNetwork  :: !Network
     }
 
 data PeerException
@@ -266,45 +270,44 @@ getMerkleBlocks p bhs = PeerOutgoing (MGetData (GetData ivs)) `send` p
     ivs = map (InvVector InvMerkleBlock . getBlockHash) bhs
 
 peerGetBlocks ::
-       MonadIO m => Peer -> [BlockHash] -> m ()
-peerGetBlocks p bhs = PeerOutgoing (MGetData (GetData ivs)) `send` p
+       MonadIO m => Network -> Peer -> [BlockHash] -> m ()
+peerGetBlocks net p bhs = PeerOutgoing (MGetData (GetData ivs)) `send` p
   where
-    con | segWit = InvWitnessBlock
+    con
+        | getSegWit net = InvWitnessBlock
         | otherwise = InvBlock
     ivs = map (InvVector con . getBlockHash) bhs
 
-peerGetTxs ::
-       MonadIO m
-    => Peer
-    -> [TxHash]
-    -> m ()
-peerGetTxs p ths = PeerOutgoing (MGetData (GetData ivs)) `send` p
+peerGetTxs :: MonadIO m => Network -> Peer -> [TxHash] -> m ()
+peerGetTxs net p ths = PeerOutgoing (MGetData (GetData ivs)) `send` p
   where
-    con | segWit = InvWitnessTx
+    con
+        | getSegWit net = InvWitnessTx
         | otherwise = InvTx
     ivs = map (InvVector con . getTxHash) ths
 
 buildVersion ::
        MonadIO m
-    => Word64
+    => Network
+    -> Word64
     -> BlockHeight
     -> NetworkAddress
     -> NetworkAddress
     -> m Version
-buildVersion nonce height loc rmt = do
+buildVersion net nonce height loc rmt = do
     time <- fromIntegral <$> computeTime
     return
         Version
-        { version = myVersion
-        , services = naServices loc
-        , timestamp = time
-        , addrRecv = rmt
-        , addrSend = loc
-        , verNonce = nonce
-        , userAgent = VarString haskoinUserAgent
-        , startHeight = height
-        , relay = True
-        }
+            { version = myVersion
+            , services = naServices loc
+            , timestamp = time
+            , addrRecv = rmt
+            , addrSend = loc
+            , verNonce = nonce
+            , userAgent = VarString (getHaskoinUserAgent net)
+            , startHeight = height
+            , relay = True
+            }
 
 chainNewPeer :: MonadIO m => Peer -> Chain -> m ()
 chainNewPeer p ch = ChainNewPeer p `send` ch

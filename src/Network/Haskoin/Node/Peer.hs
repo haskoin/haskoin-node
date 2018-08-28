@@ -76,9 +76,10 @@ peer pc p =
   where
     na = naAddress (peerConfConnect pc)
     go = handshake >> exchangePing >> peerLoop
+    net = peerConfNetwork pc
     peerSession hp ad = do
-        let src = appSource ad .| inPeerConduit
-            snk = outPeerConduit .| appSink ad
+        let src = appSource ad .| inPeerConduit net
+            snk = outPeerConduit net .| appSink ad
         withSource src p . const $ do
             pbox <- newTVarIO []
             let rd =
@@ -97,13 +98,14 @@ handshake = do
     ch <- peerConfChain <$> asks myConfig
     rmt <- peerConfConnect <$> asks myConfig
     loc <- peerConfLocal <$> asks myConfig
+    net <- peerConfNetwork <$> asks myConfig
     nonce <- peerConfNonce <$> asks myConfig
     bb <- chainGetBest ch
-    ver <- buildVersion nonce (nodeHeight bb) loc rmt
+    ver <- buildVersion net nonce (nodeHeight bb) loc rmt
     yield $ MVersion ver
     lift (remoteVer p) >>= \case
         v
-            | testSegWit v -> do
+            | testSegWit net v -> do
                 yield MVerAck
                 lift (remoteVerAck p)
                 mgr <- peerConfManager <$> asks myConfig
@@ -113,8 +115,8 @@ handshake = do
                     reject MCVersion RejectObsolete "No SegWit support"
                 throwIO PeerNoSegWit
   where
-    testSegWit v
-        | segWit = services v `testBit` 3
+    testSegWit net v
+        | getSegWit net = services v `testBit` 3
         | otherwise = True
     remoteVer p = do
         m <-
@@ -319,8 +321,8 @@ incoming m = do
         MGetAddr -> managerGetAddr p mgr
         _ -> $(logWarn) $ lp <> "Ignoring message: " <> logMsg m
 
-inPeerConduit :: MonadIO m => ConduitT ByteString PeerMessage m ()
-inPeerConduit = do
+inPeerConduit :: MonadIO m => Network -> ConduitT ByteString PeerMessage m ()
+inPeerConduit net = do
     headerBytes <- CB.take 24
     when (BL.null headerBytes) $ throwIO MessageHeaderEmpty
     case decodeLazy headerBytes of
@@ -328,11 +330,10 @@ inPeerConduit = do
         Right (MessageHeader _ _cmd len _) -> do
             when (len > 32 * 2 ^ (20 :: Int)) . throwIO $ PayloadTooLarge len
             payloadBytes <- CB.take (fromIntegral len)
-            case decodeLazy $ headerBytes `BL.append` payloadBytes of
+            case runGetLazy (getMessage net) $ headerBytes `BL.append` payloadBytes of
                 Left e    -> throwIO $ CannotDecodePayload e
                 Right msg -> yield $ PeerIncoming msg
-            inPeerConduit
+            inPeerConduit net
 
-outPeerConduit :: Monad m => ConduitT Message ByteString m ()
-outPeerConduit = awaitForever $ yield . encode
-
+outPeerConduit :: Monad m => Network -> ConduitT Message ByteString m ()
+outPeerConduit net = awaitForever $ yield . runPut . putMessage net

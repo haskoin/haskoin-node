@@ -173,6 +173,7 @@ manager cfg = do
 resolvePeers :: (MonadUnliftIO m, MonadManager n m) => m [(SockAddr, Priority)]
 resolvePeers = do
     cfg <- asks myConfig
+    let net = mgrConfNetwork cfg
     confPeers <-
         fmap
             (map (, PriorityManual) . concat)
@@ -182,7 +183,7 @@ resolvePeers = do
             seedPeers <-
                 fmap
                     (map (, PrioritySeed) . concat)
-                    (mapM (toSockAddr . (, defaultPort)) seeds)
+                    (mapM (toSockAddr . (, getDefaultPort net)) (getSeeds net))
             return (confPeers ++ seedPeers)
         else return confPeers
 
@@ -499,33 +500,41 @@ connectNewPeers = do
         mgr <- asks mySelf
         ch <- asks myChain
         pl <- mgrConfPeerListener <$> asks myConfig
+        net <- mgrConfNetwork <$> asks myConfig
         $(logInfo) $ logMe <> "Connecting to peer " <> cs (show sa)
         bbb <- asks myBestBlock
         bb <- readTVarIO bbb
         nonce <- liftIO randomIO
         let pc =
                 PeerConfig
-                { peerConfConnect = NetworkAddress srv sa
+                { peerConfConnect = NetworkAddress (srv net) sa
                 , peerConfInitBest = bb
                 , peerConfLocal = ad
                 , peerConfManager = mgr
                 , peerConfChain = ch
                 , peerConfListener = pl
                 , peerConfNonce = nonce
+                , peerConfNetwork = net
                 }
         psup <- asks myPeerSupervisor
         pmbox <- newTBQueueIO 100
         uid <- liftIO newUnique
         let p = UniqueInbox {uniqueInbox = Inbox pmbox, uniqueId = uid}
         a <- psup `addChild` peer pc p
-        newPeerConnection sa nonce p a
-    srv
-        | segWit = 8
+        newPeerConnection net sa nonce p a
+    srv net
+        | getSegWit net = 8
         | otherwise = 0
 
 newPeerConnection ::
-       MonadManager n m => SockAddr -> Word64 -> Peer -> Async () -> m ()
-newPeerConnection sa nonce p a =
+       MonadManager n m
+    => Network
+    -> SockAddr
+    -> Word64
+    -> Peer
+    -> Async ()
+    -> m ()
+newPeerConnection net sa nonce p a =
     addPeer
         OnlinePeer
         { onlinePeerAddress = sa
@@ -535,7 +544,7 @@ newPeerConnection sa nonce p a =
         , onlinePeerRemoteNonce = 0
         , onlinePeerUserAgent = BS.empty
         , onlinePeerRelay = False
-        , onlinePeerBestBlock = genesisNode
+        , onlinePeerBestBlock = genesisNode net
         , onlinePeerAsync = a
         , onlinePeerMailbox = p
         , onlinePeerNonce = nonce

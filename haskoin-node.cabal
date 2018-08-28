@@ -2,7 +2,7 @@
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 88d3d1726cf4c664d56193817bc629dedb101e5083a9f98e1b9fe9fbf6423ae0
+-- hash: 17541e159e1ad010d848e43de2de0ef3d87f00e19dd5f350f4cef9985339ece0
 
 name:           haskoin-node
 version:        1.0.0
@@ -36,6 +36,7 @@ library
     , conduit-extra
     , hashable
     , haskoin-core
+    , hspec
     , monad-logger
     , mtl
     , network

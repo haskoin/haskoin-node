@@ -18,6 +18,7 @@ dependencies:
 - bytestring
 - cereal
 - haskoin-core
+- hspec
 - rocksdb-haskell
 - monad-logger
 - mtl
@@ -49,4 +50,3 @@ tests:
     - -with-rtsopts=-N
     dependencies:
     - haskoin-node
-    - hspec

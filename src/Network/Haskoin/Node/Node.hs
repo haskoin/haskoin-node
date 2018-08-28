@@ -36,6 +36,7 @@ node cfg = do
         , chainConfListener = nodeEvents cfg . ChainEvent
         , chainConfManager = nodeManager cfg
         , chainConfChain = nodeChain cfg
+        , chainConfNetwork = nodeNet cfg
         }
     mgrCfg psup =
         ManagerConfig
@@ -49,6 +50,7 @@ node cfg = do
         , mgrConfManager = nodeManager cfg
         , mgrConfChain = nodeChain cfg
         , mgrConfPeerSupervisor = psup
+        , mgrConfNetwork = nodeNet cfg
         }
     deadPeer ex = PeerStopped ex `sendSTM` nodeManager cfg
 
