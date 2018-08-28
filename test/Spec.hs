@@ -12,9 +12,11 @@ import           Data.Either
 import           Data.Maybe
 import           Data.Serialize
 import qualified Database.RocksDB            as RocksDB
+import           Network.Haskoin.Address
 import           Network.Haskoin.Block
 import           Network.Haskoin.Constants
 import           Network.Haskoin.Crypto
+import           Network.Haskoin.Keys
 import           Network.Haskoin.Network
 import           Network.Haskoin.Node
 import           Network.Haskoin.Transaction
@@ -92,7 +94,7 @@ main = do
                 n <- randomIO
                 let f0 = bloomCreate 2 0.001 n BloomUpdateAll
                     f1 = bloomInsert f0 $ encode k
-                    f2 = bloomInsert f1 $ encode $ getAddrHash a
+                    f2 = bloomInsert f1 $ encode $ getAddrHash160 a
                 f2 `setManagerFilter` testMgr
                 p <-
                     receiveMatch testEvents $ \case

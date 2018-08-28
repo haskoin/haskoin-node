@@ -75,7 +75,7 @@ instance (Monad m, MonadLoggerIO m, MonadReader ChainReader m) =>
     addBlockHeader bn = do
         db <- asks headerDB
         insert db (BlockHeaderKey (headerHash (nodeHeader bn))) bn
-    getBlockHeader net bh = do
+    getBlockHeader bh = do
         db <- asks headerDB
         retrieve db Nothing (BlockHeaderKey bh)
     getBestBlockHeader = do
@@ -216,16 +216,13 @@ processChainMessage (ChainGetBest reply) =
     getBestBlockHeader >>= atomically . reply
 
 processChainMessage (ChainGetAncestor h n reply) = do
-    net <- chainConfNetwork <$> asks myConfig
-    getAncestor net h n >>= atomically . reply
+    getAncestor h n >>= atomically . reply
 
 processChainMessage (ChainGetSplit r l reply) = do
-    net <- chainConfNetwork <$> asks myConfig
-    splitPoint net r l >>= atomically . reply
+    splitPoint r l >>= atomically . reply
 
 processChainMessage (ChainGetBlock h reply) = do
-    net <- chainConfNetwork <$> asks myConfig
-    getBlockHeader net h >>= atomically . reply
+    getBlockHeader h >>= atomically . reply
 
 processChainMessage (ChainSendHeaders _) = return ()
 
@@ -264,10 +261,9 @@ syncHeaders :: MonadChain m => BlockNode -> Peer -> m ()
 syncHeaders bb p = do
     st <- asks chainState
     s <- readTVarIO st
-    net <- chainConfNetwork <$> asks myConfig
     atomically . writeTVar st $
         s {syncingPeer = Just p, newPeers = delete p (newPeers s)}
-    loc <- blockLocator net bb
+    loc <- blockLocator bb
     let m =
             MGetHeaders
                 GetHeaders
