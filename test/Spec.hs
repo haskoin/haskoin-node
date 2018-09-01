@@ -83,7 +83,7 @@ main = do
                 let a =
                         fromJust $
                         stringToAddr net "mgpS4Zis8iwNhriKMro1QSGDAbY6pqzRtA"
-                    k :: PubKeyC
+                    k :: PubKey
                     k =
                         "02c3cface1777c70251cb206f7c80cabeae195dfbeeff0767cbd2a58d22be383da"
                     h1 =
@@ -93,7 +93,7 @@ main = do
                     bhs = [h1, h2]
                 n <- randomIO
                 let f0 = bloomCreate 2 0.001 n BloomUpdateAll
-                    f1 = bloomInsert f0 $ encode k
+                    f1 = bloomInsert f0 $ exportPubKey True k
                     f2 = bloomInsert f1 $ encode $ getAddrHash160 a
                 f2 `setManagerFilter` testMgr
                 p <-
@@ -112,7 +112,7 @@ main = do
                             | p == p' -> Just b
                         _ -> Nothing
                 liftIO $ do
-                    a `shouldBe` pubKeyAddr net k
+                    a `shouldBe` pubKeyAddr net (wrapPubKey True k)
                     b1 `shouldSatisfy` testMerkleRoot net
                     b2 `shouldSatisfy` testMerkleRoot net
         it "connects to multiple peers" $
