@@ -58,7 +58,7 @@ time :: Int
 time = 15 * 1000 * 1000
 
 logMsg :: IsString a => Message -> a
-logMsg = fromString . msgType
+logMsg = fromString . cs . commandToString . msgType
 
 logPeer ::
        (ConvertibleStrings String a, Semigroup a, IsString a) => SockAddr -> a
