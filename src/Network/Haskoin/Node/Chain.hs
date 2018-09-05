@@ -5,6 +5,7 @@
 {-# LANGUAGE LambdaCase                #-}
 {-# LANGUAGE MultiParamTypeClasses     #-}
 {-# LANGUAGE OverloadedStrings         #-}
+{-# LANGUAGE ScopedTypeVariables       #-}
 {-# LANGUAGE TemplateHaskell           #-}
 {-# LANGUAGE UndecidableInstances      #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
@@ -24,8 +25,7 @@ import           Data.Serialize
 import           Data.String
 import           Data.String.Conversions
 import           Database.RocksDB            (DB)
-import qualified Database.RocksDB            as RocksDB
-import           Database.RocksDB.Query
+import           Database.RocksDB.Query      as R
 import           Network.Haskoin.Block
 import           Network.Haskoin.Network
 import           Network.Haskoin.Node.Common
@@ -104,17 +104,16 @@ chain cfg = do
             ChainState {syncingPeer = Nothing, mySynced = False, newPeers = []}
     let rd =
             ChainReader
-            {myConfig = cfg, headerDB = chainConfDB cfg, chainState = st}
+                {myConfig = cfg, headerDB = chainConfDB cfg, chainState = st}
     run `runReaderT` rd
   where
     net = chainConfNetwork cfg
     run = do
-        let gs = encode (genesisNode net)
         db <- asks headerDB
-        m <- RocksDB.get db RocksDB.defaultReadOptions (BS.singleton 0x91)
+        m :: Maybe BlockNode <- retrieve db Nothing BestBlockKey
         when (isNothing m) $ do
             addBlockHeader (genesisNode net)
-            RocksDB.put db RocksDB.defaultWriteOptions (BS.singleton 0x91) gs
+            insert db BestBlockKey (genesisNode net)
         forever $ do
             msg <- receive $ chainConfChain cfg
             processChainMessage msg
