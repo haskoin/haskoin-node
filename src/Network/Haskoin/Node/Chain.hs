@@ -151,7 +151,9 @@ processChainMessage (ChainNewHeaders p hcs) = do
                             s {newPeers = nub $ p : newPeers s}
   where
     synced bb = do
-        $(logInfo) $
+        asks chainState >>= readTVarIO >>= \x ->
+            when (null (newPeers x)) $
+            $(logInfo) $
             logMe <> "Headers synced to height " <> cs (show (nodeHeight bb))
         st <- asks chainState
         atomically . modifyTVar st $ \s -> s {syncingPeer = Nothing}
