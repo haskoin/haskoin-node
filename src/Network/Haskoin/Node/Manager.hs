@@ -268,14 +268,12 @@ banPeer sa = do
             now <- computeTime
             let v' =
                     v
-                    { getPeerBanned = now
-                    , getPeerNextConnect = now + 6 * 60 * 60
-                    }
+                        { getPeerBanned = now
+                        , getPeerNextConnect = now + 6 * 60 * 60
+                        }
             when (getPeerPrio v == PriorityNetwork) $ do
-                $(logWarn) $ logMe <> "Banning peer " <> cs (show sa)
-                writeBatch
-                    db
-                    [deleteOp v, insertOp k v', insertOp v' k]
+                $(logWarnS) "Manager" $ "Banning peer " <> cs (show sa)
+                writeBatch db [deleteOp v, insertOp k v', insertOp v' k]
 
 backoffPeer :: MonadManager n m => SockAddr -> m ()
 backoffPeer sa = do
@@ -294,8 +292,8 @@ backoffPeer sa = do
             let t = max (now + r) (getPeerNextConnect v)
                 v' = v {getPeerNextConnect = t}
             when (getPeerPrio v == PriorityNetwork) $ do
-                $(logWarn) $
-                    logMe <> "Backing off peer " <> cs (show sa) <> " for " <>
+                $(logWarnS) "Manager" $
+                    "Backing off peer " <> cs (show sa) <> " for " <>
                     cs (show r) <>
                     " seconds"
                 writeBatch db [deleteOp v, insertOp k v', insertOp v' k]
@@ -347,7 +345,7 @@ processManagerMessage ManagerPing = connectNewPeers
 
 processManagerMessage (ManagerGetAddr p) = do
     pn <- peerString p
-    $(logWarn) $ logMe <> "Ignoring address request from peer " <> fromString pn
+    $(logWarnS) "Manager" $ "Ignoring address request from peer " <> fromString pn
 
 processManagerMessage (ManagerNewPeers p as) =
     asks myConfig >>= \case
@@ -355,8 +353,8 @@ processManagerMessage (ManagerNewPeers p as) =
             | not mgrConfDiscover -> return ()
             | otherwise -> do
                 pn <- peerString p
-                $(logInfo) $
-                    logMe <> "Received " <> cs (show (length as)) <>
+                $(logInfoS) "Manager" $
+                    "Received " <> cs (show (length as)) <>
                     " peers from " <>
                     fromString pn
                 forM_ as $ \(_, na) ->
@@ -367,8 +365,8 @@ processManagerMessage (ManagerKill e p) =
     findPeer p >>= \case
         Nothing -> return ()
         Just op -> do
-            $(logError) $
-                logMe <> "Killing peer " <> cs (show (onlinePeerAddress op))
+            $(logErrorS) "Manager" $
+                "Killing peer " <> cs (show (onlinePeerAddress op))
             banPeer $ onlinePeerAddress op
             onlinePeerAsync op `cancelWith` e
 
@@ -395,12 +393,12 @@ processManagerMessage (ManagerSetPeerVersion p v) =
   where
     f op =
         op
-        { onlinePeerVersion = version v
-        , onlinePeerServices = services v
-        , onlinePeerRemoteNonce = verNonce v
-        , onlinePeerUserAgent = getVarString (userAgent v)
-        , onlinePeerRelay = relay v
-        }
+            { onlinePeerVersion = version v
+            , onlinePeerServices = services v
+            , onlinePeerRemoteNonce = verNonce v
+            , onlinePeerUserAgent = getVarString (userAgent v)
+            , onlinePeerRelay = relay v
+            }
     testVersion = do
         when (services v .&. nodeNetwork == 0) $ throwError NotNetworkPeer
         bfb <- asks myBloomFilter
@@ -415,7 +413,7 @@ processManagerMessage (ManagerSetPeerVersion p v) =
         bf <- readTVarIO bfb
         case bf of
             Nothing -> return ()
-            Just b  -> b `peerSetFilter` p
+            Just b -> b `peerSetFilter` p
     askForPeers =
         mgrConfDiscover <$> asks myConfig >>= \discover ->
             when discover (MGetAddr `sendMessage` p)
@@ -425,9 +423,8 @@ processManagerMessage (ManagerSetPeerVersion p v) =
             Just op
                 | onlinePeerConnected op -> return ()
                 | otherwise -> do
-                    $(logInfo) $
-                        logMe <> "Connected to " <>
-                        cs (show (onlinePeerAddress op))
+                    $(logInfoS) "Manager" $
+                        "Connected to " <> cs (show (onlinePeerAddress op))
                     l <- mgrConfMgrListener <$> asks myConfig
                     atomically (l (ManagerConnect p))
                     ch <- asks myChain
@@ -459,14 +456,14 @@ processPeerOffline :: MonadManager n m => OnlinePeer -> m ()
 processPeerOffline op
     | onlinePeerConnected op = do
         let p = onlinePeerMailbox op
-        $(logWarn) $
-            logMe <> "Disconnected peer " <> cs (show (onlinePeerAddress op))
+        $(logWarnS) "Manager" $
+            "Disconnected peer " <> cs (show (onlinePeerAddress op))
         asks myChain >>= chainRemovePeer p
         l <- mgrConfMgrListener <$> asks myConfig
         atomically (l (ManagerDisconnect p))
     | otherwise =
-        $(logWarn) $
-        logMe <> "Could not connect to peer " <> cs (show (onlinePeerAddress op))
+        $(logWarnS) "Manager" $
+        "Could not connect to peer " <> cs (show (onlinePeerAddress op))
 
 getPeers :: MonadManager n m => m [Peer]
 getPeers = do
@@ -481,13 +478,12 @@ connectNewPeers = do
     let n = mo - length ps
     case ps of
         [] -> do
-            $(logWarn) $ logMe <> "No peers connected"
+            $(logInfoS) "Manager" $ "No peers connected"
             ps' <- resolvePeers
             mapM_ (uncurry storePeer) ps'
         _ ->
-            $(logInfo) $
-            logMe <> "Peers connected: " <> cs (show (length ps)) <> "/" <>
-            cs (show mo)
+            $(logInfoS) "Manager" $
+            "Peers connected: " <> cs (show (length ps)) <> "/" <> cs (show mo)
     go n
   where
     go 0 = return ()
@@ -501,21 +497,21 @@ connectNewPeers = do
         ch <- asks myChain
         pl <- mgrConfPeerListener <$> asks myConfig
         net <- mgrConfNetwork <$> asks myConfig
-        $(logInfo) $ logMe <> "Connecting to peer " <> cs (show sa)
+        $(logInfoS) "Manager" $ "Connecting to peer " <> cs (show sa)
         bbb <- asks myBestBlock
         bb <- readTVarIO bbb
         nonce <- liftIO randomIO
         let pc =
                 PeerConfig
-                { peerConfConnect = NetworkAddress (srv net) sa
-                , peerConfInitBest = bb
-                , peerConfLocal = ad
-                , peerConfManager = mgr
-                , peerConfChain = ch
-                , peerConfListener = pl
-                , peerConfNonce = nonce
-                , peerConfNetwork = net
-                }
+                    { peerConfConnect = NetworkAddress (srv net) sa
+                    , peerConfInitBest = bb
+                    , peerConfLocal = ad
+                    , peerConfManager = mgr
+                    , peerConfChain = ch
+                    , peerConfListener = pl
+                    , peerConfNonce = nonce
+                    , peerConfNetwork = net
+                    }
         psup <- asks myPeerSupervisor
         pmbox <- newTBQueueIO 100
         uid <- liftIO newUnique
@@ -567,14 +563,11 @@ setFilter bl = do
         if acceptsFilters $ onlinePeerServices op
             then bl `peerSetFilter` onlinePeerMailbox op
             else do
-                $(logError) $
-                    logMe <> "Peer " <> cs (show (onlinePeerAddress op)) <>
+                $(logErrorS) "Manager" $
+                    "Peer " <> cs (show (onlinePeerAddress op)) <>
                     "does not support bloom filters"
                 banPeer (onlinePeerAddress op)
                 onlinePeerAsync op `cancelWith` BloomFiltersNotSupported
-
-logMe :: IsString a => a
-logMe = "[Manager] "
 
 findPeer :: MonadManager n m => Peer -> m (Maybe OnlinePeer)
 findPeer p = find ((== p) . onlinePeerMailbox) <$> getOnlinePeers

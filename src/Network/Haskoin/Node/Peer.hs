@@ -62,13 +62,13 @@ logMsg = fromString . cs . commandToString . msgType
 
 logPeer ::
        (ConvertibleStrings String a, Semigroup a, IsString a) => SockAddr -> a
-logPeer sa = "[Peer " <> cs (show sa) <> "] "
+logPeer sa = "Peer " <> cs (show sa) <> ""
 
 peer :: (MonadUnliftIO m, MonadLoggerIO m) => PeerConfig -> Peer -> m ()
 peer pc p =
     fromSockAddr na >>= \case
         Nothing -> do
-            $(logError) $ logPeer na <> "Invalid network address"
+            $(logErrorS) (logPeer na) $ "Invalid network address"
             throwIO PeerAddressInvalid
         Just (host, port) -> do
             let cset = clientSettings port (C8.pack host)
@@ -157,13 +157,13 @@ exchangePing = do
             _ -> Nothing
     case m of
         Nothing -> do
-            $(logError) $ lp <> "Timeout while waiting for pong"
+            $(logErrorS) lp $ "Timeout while waiting for pong"
             throwIO PeerTimeout
         Just () -> do
             t2 <- liftIO getCurrentTime
             let d = t2 `diffUTCTime` t1
-            $(logDebug) $
-                lp <> "Roundtrip: " <> cs (show (d * 1000)) <> " ms"
+            $(logDebugS) lp $
+                "Roundtrip: " <> cs (show (d * 1000)) <> " ms"
             ManagerPeerPing me d `send` mgr
 
 checkStale :: MonadPeer m => ConduitM () Message m ()
@@ -271,7 +271,7 @@ incoming m = do
     ch <- peerConfChain <$> asks myConfig
     case m of
         MVersion _ -> do
-            $(logError) $ lp <> "Received duplicate " <> logMsg m
+            $(logErrorS) lp $ "Received duplicate " <> logMsg m
             yield $
                 MReject
                     Reject
@@ -283,7 +283,7 @@ incoming m = do
         MPing (Ping n) -> yield $ MPong (Pong n)
         MPong (Pong n) -> atomically (l (p, GotPong n))
         MSendHeaders {} -> ChainSendHeaders p `send` ch
-        MAlert {} -> $(logWarn) $ lp <> "Deprecated " <> logMsg m
+        MAlert {} -> $(logWarnS) lp $ "Deprecated " <> logMsg m
         MAddr (Addr as) -> managerNewPeers p as mgr
         MInv (Inv is) -> do
             let ts = [TxHash (invHash i) | i <- is, invType i == InvTx]
@@ -319,7 +319,7 @@ incoming m = do
         MReject r -> atomically (l (p, Rejected r))
         MMempool -> atomically (l (p, WantMempool))
         MGetAddr -> managerGetAddr p mgr
-        _ -> $(logWarn) $ lp <> "Ignoring message: " <> logMsg m
+        _ -> $(logWarnS) lp $ "Ignoring message: " <> logMsg m
 
 inPeerConduit :: MonadIO m => Network -> ConduitT ByteString PeerMessage m ()
 inPeerConduit net = do

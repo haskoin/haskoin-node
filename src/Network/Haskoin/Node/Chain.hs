@@ -130,7 +130,7 @@ processChainMessage (ChainNewHeaders p hcs) = do
     case bhsE of
         Right bhs -> conn bb bhs spM
         Left e -> do
-            $(logWarn) $ logMe <> "Could not connect headers: " <> cs e
+            $(logWarnS) "Chain" $ "Could not connect headers: " <> cs e
             case spM of
                 Nothing -> do
                     bb' <- getBestBlockHeader
@@ -139,7 +139,7 @@ processChainMessage (ChainNewHeaders p hcs) = do
                     syncHeaders bb' p
                 Just sp
                     | sp == p -> do
-                        $(logError) $ logMe <> "Syncing peer sent bad headers"
+                        $(logErrorS) "Chain" $ "Syncing peer sent bad headers"
                         mgr <- chainConfManager <$> asks myConfig
                         managerKill PeerSentBadHeaders p mgr
                         atomically . modifyTVar stb $ \s ->
@@ -160,8 +160,8 @@ processChainMessage (ChainNewHeaders p hcs) = do
     conn bb bhs spM = do
         bb' <- getBestBlockHeader
         when (bb /= bb') $ do
-            $(logInfo) $
-                logMe <> "Best header at height " <> cs (show (nodeHeight bb'))
+            $(logInfoS) "Chain" $
+                "Best header at height " <> cs (show (nodeHeight bb'))
             mgr <- chainConfManager <$> asks myConfig
             managerSetBest bb' mgr
             l <- chainConfListener <$> asks myConfig
@@ -271,6 +271,3 @@ syncHeaders bb p = do
                       BS.replicate 32 0
                 }
     PeerOutgoing m `send` p
-
-logMe :: IsString a => a
-logMe = "[Chain] "
