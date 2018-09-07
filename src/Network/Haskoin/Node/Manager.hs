@@ -478,7 +478,7 @@ connectNewPeers = do
     let n = mo - length ps
     case ps of
         [] -> do
-            $(logInfoS) "Manager" $ "No peers connected"
+            $(logInfoS) "Manager" "No peers connected"
             ps' <- resolvePeers
             mapM_ (uncurry storePeer) ps'
         _ ->
@@ -592,7 +592,7 @@ removePeer :: Async () -> TVar [OnlinePeer] -> STM ()
 removePeer a t = modifyTVar t $ filter ((/= a) . onlinePeerAsync)
 
 getOnlinePeers :: MonadManager n m => m [OnlinePeer]
-getOnlinePeers = asks onlinePeers >>= atomically . readTVar
+getOnlinePeers = asks onlinePeers >>= readTVarIO
 
 modifyOnlinePeers :: MonadManager n m => ([OnlinePeer] -> [OnlinePeer]) -> m ()
 modifyOnlinePeers f = asks onlinePeers >>= atomically . (`modifyTVar` f)

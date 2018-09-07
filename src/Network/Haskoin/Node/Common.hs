@@ -7,7 +7,6 @@ module Network.Haskoin.Node.Common where
 import           Control.Concurrent.NQE
 import           Control.Concurrent.Unique
 import           Data.Hashable
-import           Data.String
 import           Data.Time.Clock
 import           Data.Time.Clock.POSIX
 import           Data.Word

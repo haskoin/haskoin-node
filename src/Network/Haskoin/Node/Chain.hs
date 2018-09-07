@@ -22,7 +22,6 @@ import           Data.Either
 import           Data.List                   (delete, nub)
 import           Data.Maybe
 import           Data.Serialize
-import           Data.String
 import           Data.String.Conversions
 import           Database.RocksDB            (DB)
 import           Database.RocksDB.Query      as R
@@ -53,8 +52,7 @@ newtype BlockHeaderKey = BlockHeaderKey BlockHash deriving (Eq, Show)
 instance Serialize BlockHeaderKey where
     get = do
         guard . (== 0x90) =<< getWord8
-        bh <- get
-        return (BlockHeaderKey bh)
+        BlockHeaderKey <$> get
     put (BlockHeaderKey bh) = do
         putWord8 0x90
         put bh
@@ -139,7 +137,7 @@ processChainMessage (ChainNewHeaders p hcs) = do
                     syncHeaders bb' p
                 Just sp
                     | sp == p -> do
-                        $(logErrorS) "Chain" $ "Syncing peer sent bad headers"
+                        $(logErrorS) "Chain" "Syncing peer sent bad headers"
                         mgr <- chainConfManager <$> asks myConfig
                         managerKill PeerSentBadHeaders p mgr
                         atomically . modifyTVar stb $ \s ->
@@ -149,7 +147,7 @@ processChainMessage (ChainNewHeaders p hcs) = do
                         atomically . modifyTVar stb $ \s ->
                             s {newPeers = nub $ p : newPeers s}
   where
-    synced bb = do
+    synced = do
         st <- asks chainState
         atomically . modifyTVar st $ \s -> s {syncingPeer = Nothing}
         MSendHeaders `sendMessage` p
@@ -167,7 +165,7 @@ processChainMessage (ChainNewHeaders p hcs) = do
             l <- chainConfListener <$> asks myConfig
             atomically . l $ ChainNewBest bb'
         case length hcs of
-            0 -> synced bb'
+            0 -> synced
             2000 ->
                 case spM of
                     Just sp
@@ -180,7 +178,7 @@ processChainMessage (ChainNewHeaders p hcs) = do
                             s {newPeers = nub $ p : newPeers s}
             _ -> do
                 upeer $ head bhs
-                synced bb'
+                synced
 
 processChainMessage (ChainNewPeer p) = do
     st <- asks chainState
@@ -212,13 +210,13 @@ processChainMessage (ChainRemovePeer p) = do
 processChainMessage (ChainGetBest reply) =
     getBestBlockHeader >>= atomically . reply
 
-processChainMessage (ChainGetAncestor h n reply) = do
+processChainMessage (ChainGetAncestor h n reply) =
     getAncestor h n >>= atomically . reply
 
-processChainMessage (ChainGetSplit r l reply) = do
+processChainMessage (ChainGetSplit r l reply) =
     splitPoint r l >>= atomically . reply
 
-processChainMessage (ChainGetBlock h reply) = do
+processChainMessage (ChainGetBlock h reply) =
     getBlockHeader h >>= atomically . reply
 
 processChainMessage (ChainSendHeaders _) = return ()

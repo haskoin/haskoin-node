@@ -68,7 +68,7 @@ peer :: (MonadUnliftIO m, MonadLoggerIO m) => PeerConfig -> Peer -> m ()
 peer pc p =
     fromSockAddr na >>= \case
         Nothing -> do
-            $(logErrorS) (logPeer na) $ "Invalid network address"
+            $(logErrorS) (logPeer na) "Invalid network address"
             throwIO PeerAddressInvalid
         Just (host, port) -> do
             let cset = clientSettings port (C8.pack host)
@@ -157,7 +157,7 @@ exchangePing = do
             _ -> Nothing
     case m of
         Nothing -> do
-            $(logErrorS) lp $ "Timeout while waiting for pong"
+            $(logErrorS) lp "Timeout while waiting for pong"
             throwIO PeerTimeout
         Just () -> do
             t2 <- liftIO getCurrentTime

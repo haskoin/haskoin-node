@@ -10,7 +10,7 @@ nix:
     - zlib
 extra-deps:
 - git: https://github.com/haskoin/haskoin-core.git
-  commit: 4e12a2f62a344f5ca02fb115f6b66c26af28d983
+  commit: f573ed574d1a40bbc0dcf0c9f1f9c408dd1ce531
 - git: https://github.com/xenog/nqe.git
   commit: 43661fd297bd2e8d1ab61e7a9cf8030130b7e82e
 - git: https://github.com/xenog/rocksdb-query.git

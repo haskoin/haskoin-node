@@ -9,7 +9,6 @@ module Network.Haskoin.Node.Node
 
 import           Control.Concurrent.NQE
 import           Control.Monad.Logger
-import           Data.String
 import           Network.Haskoin.Node.Chain
 import           Network.Haskoin.Node.Common
 import           Network.Haskoin.Node.Manager
@@ -23,7 +22,7 @@ node ::
     -> m ()
 node cfg = do
     psup <- Inbox <$> newTQueueIO
-    $(logInfo) $ logMe <> "Starting node"
+    $(logInfoS) "Node" "Starting..."
     supervisor
         KillAll
         (nodeSupervisor cfg)
@@ -53,6 +52,3 @@ node cfg = do
         , mgrConfNetwork = nodeNet cfg
         }
     deadPeer ex = PeerStopped ex `sendSTM` nodeManager cfg
-
-logMe :: IsString a => a
-logMe = "[Node] "
