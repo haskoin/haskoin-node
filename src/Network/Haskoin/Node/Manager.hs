@@ -18,7 +18,6 @@ import           Control.Monad.Except
 import           Control.Monad.Logger
 import           Control.Monad.Reader
 import           Data.Bits
-import           Data.ByteString             (ByteString)
 import qualified Data.ByteString             as BS
 import           Data.Conduit
 import qualified Data.Conduit.Combinators    as CC
@@ -29,7 +28,6 @@ import           Data.Serialize              (Get, Put, Serialize, get, put)
 import qualified Data.Serialize              as S
 import           Data.String
 import           Data.String.Conversions
-import           Data.Time.Clock
 import           Data.Word
 import           Database.RocksDB            (DB)
 import           Database.RocksDB.Query
@@ -50,21 +48,6 @@ type MonadManager n m
        , MonadUnliftIO m
        , MonadLoggerIO m
        , MonadReader (ManagerReader n) m)
-
-data OnlinePeer = OnlinePeer
-    { onlinePeerAddress     :: !SockAddr
-    , onlinePeerConnected   :: !Bool
-    , onlinePeerVersion     :: !Word32
-    , onlinePeerServices    :: !Word64
-    , onlinePeerRemoteNonce :: !Word64
-    , onlinePeerUserAgent   :: !ByteString
-    , onlinePeerRelay       :: !Bool
-    , onlinePeerBestBlock   :: !BlockNode
-    , onlinePeerAsync       :: !(Async ())
-    , onlinePeerMailbox     :: !Peer
-    , onlinePeerNonce       :: !Word64
-    , onlinePeerPings       :: ![NominalDiffTime]
-    }
 
 data ManagerReader n = ManagerReader
     { mySelf           :: !Manager
@@ -437,6 +420,9 @@ processManagerMessage (ManagerGetPeerVersion p reply) =
 processManagerMessage (ManagerGetPeers reply) =
     getPeers >>= atomically . reply
 
+processManagerMessage (ManagerGetOnlinePeer p reply) =
+    getOnlinePeer p >>= atomically . reply
+
 processManagerMessage (ManagerPeerPing p i) =
     modifyPeer (\x -> x {onlinePeerPings = take 11 $ i : onlinePeerPings x}) p
 
@@ -465,11 +451,11 @@ processPeerOffline op
         $(logWarnS) "Manager" $
         "Could not connect to peer " <> cs (show (onlinePeerAddress op))
 
-getPeers :: MonadManager n m => m [Peer]
-getPeers = do
-    ps <- getConnectedPeers
-    return . map onlinePeerMailbox $
-        sortBy (compare `on` median . onlinePeerPings) ps
+getPeers :: MonadManager n m => m [OnlinePeer]
+getPeers = sortBy (compare `on` median . onlinePeerPings) <$> getConnectedPeers
+
+getOnlinePeer :: MonadManager n m => Peer -> m (Maybe OnlinePeer)
+getOnlinePeer p = find ((== p) . onlinePeerMailbox) <$> getConnectedPeers
 
 connectNewPeers :: MonadManager n m => m ()
 connectNewPeers = do

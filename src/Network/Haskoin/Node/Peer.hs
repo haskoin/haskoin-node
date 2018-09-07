@@ -7,8 +7,8 @@
 {-# LANGUAGE TupleSections         #-}
 {-# LANGUAGE TypeFamilies          #-}
 module Network.Haskoin.Node.Peer
-( peer
-) where
+    ( peer
+    ) where
 
 import           Control.Concurrent.NQE
 import           Control.Monad

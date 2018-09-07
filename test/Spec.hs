@@ -15,7 +15,6 @@ import qualified Database.RocksDB            as RocksDB
 import           Network.Haskoin.Address
 import           Network.Haskoin.Block
 import           Network.Haskoin.Constants
-import           Network.Haskoin.Crypto
 import           Network.Haskoin.Keys
 import           Network.Haskoin.Network
 import           Network.Haskoin.Node

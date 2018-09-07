@@ -6,6 +6,7 @@ module Network.Haskoin.Node.Common where
 
 import           Control.Concurrent.NQE
 import           Control.Concurrent.Unique
+import           Data.ByteString             (ByteString)
 import           Data.Hashable
 import           Data.Time.Clock
 import           Data.Time.Clock.POSIX
@@ -26,6 +27,21 @@ import           UnliftIO
 type HostPort = (Host, Port)
 type Host = String
 type Port = Int
+
+data OnlinePeer = OnlinePeer
+    { onlinePeerAddress     :: !SockAddr
+    , onlinePeerConnected   :: !Bool
+    , onlinePeerVersion     :: !Word32
+    , onlinePeerServices    :: !Word64
+    , onlinePeerRemoteNonce :: !Word64
+    , onlinePeerUserAgent   :: !ByteString
+    , onlinePeerRelay       :: !Bool
+    , onlinePeerBestBlock   :: !BlockNode
+    , onlinePeerAsync       :: !(Async ())
+    , onlinePeerMailbox     :: !Peer
+    , onlinePeerNonce       :: !Word64
+    , onlinePeerPings       :: ![NominalDiffTime]
+    }
 
 data UniqueInbox a = UniqueInbox
     { uniqueInbox :: Inbox a
@@ -105,7 +121,8 @@ data ManagerMessage
                             !Version
     | ManagerGetPeerVersion !Peer
                             !(Reply (Maybe Word32))
-    | ManagerGetPeers !(Reply [Peer])
+    | ManagerGetPeers !(Reply [OnlinePeer])
+    | ManagerGetOnlinePeer !Peer !(Reply (Maybe OnlinePeer))
     | ManagerPeerPing !Peer
                       !NominalDiffTime
     | PeerStopped !(Async (), Either SomeException ())
@@ -237,8 +254,11 @@ managerGetPeerBest p mgr = ManagerGetPeerBest p `query` mgr
 managerSetPeerBest :: MonadIO m => Peer -> BlockNode -> Manager -> m ()
 managerSetPeerBest p bn mgr = ManagerSetPeerBest p bn `send` mgr
 
-managerGetPeers :: MonadIO m => Manager -> m [Peer]
+managerGetPeers :: MonadIO m => Manager -> m [OnlinePeer]
 managerGetPeers mgr = ManagerGetPeers `query` mgr
+
+managerGetPeer :: MonadIO m => Manager -> Peer -> m (Maybe OnlinePeer)
+managerGetPeer mgr p = ManagerGetOnlinePeer p `query` mgr
 
 managerGetAddr :: MonadIO m => Peer -> Manager -> m ()
 managerGetAddr p mgr = ManagerGetAddr p `send` mgr
