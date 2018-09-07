@@ -534,7 +534,7 @@ newPeerConnection net sa nonce p a =
         }
 
 peerString :: MonadManager n m => Peer -> m String
-peerString p = maybe "unknown" (show . onlinePeerAddress) <$> findPeer p
+peerString p = maybe "[unknown]" (show . onlinePeerAddress) <$> findPeer p
 
 setPeerAnnounced :: MonadManager n m => Peer -> m ()
 setPeerAnnounced = modifyPeer (\x -> x {onlinePeerConnected = True})

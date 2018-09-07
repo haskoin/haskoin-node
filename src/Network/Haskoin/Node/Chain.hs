@@ -22,6 +22,7 @@ import           Data.Either
 import           Data.List                   (delete, nub)
 import           Data.Maybe
 import           Data.Serialize
+import           Data.String
 import           Data.String.Conversions
 import           Database.RocksDB            (DB)
 import           Database.RocksDB.Query      as R
@@ -137,7 +138,9 @@ processChainMessage (ChainNewHeaders p hcs) = do
                     syncHeaders bb' p
                 Just sp
                     | sp == p -> do
-                        $(logErrorS) "Chain" "Syncing peer sent bad headers"
+                        pstr <- peerString p
+                        $(logErrorS) "Chain" $
+                            "Syncing peer " <> pstr <> " sent bad headers"
                         mgr <- chainConfManager <$> asks myConfig
                         managerKill PeerSentBadHeaders p mgr
                         atomically . modifyTVar stb $ \s ->
@@ -269,3 +272,10 @@ syncHeaders bb p = do
                       BS.replicate 32 0
                 }
     PeerOutgoing m `send` p
+
+peerString :: (MonadChain m, IsString a) => Peer -> m a
+peerString p = do
+    mgr <- chainConfManager <$> asks myConfig
+    managerGetPeer mgr p >>= \case
+        Nothing -> return "[unknown]"
+        Just o -> return $ fromString $ show (onlinePeerAddress o)
