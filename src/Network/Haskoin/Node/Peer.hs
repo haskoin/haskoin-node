@@ -62,7 +62,7 @@ logMsg = fromString . cs . commandToString . msgType
 
 logPeer ::
        (ConvertibleStrings String a, Semigroup a, IsString a) => SockAddr -> a
-logPeer sa = "Peer " <> cs (show sa) <> ""
+logPeer sa = "Peer<" <> cs (show sa) <> ">"
 
 peer :: (MonadUnliftIO m, MonadLoggerIO m) => PeerConfig -> Peer -> m ()
 peer pc p =
