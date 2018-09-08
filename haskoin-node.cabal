@@ -2,10 +2,10 @@
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 17541e159e1ad010d848e43de2de0ef3d87f00e19dd5f350f4cef9985339ece0
+-- hash: bc9819d93e5fb08230d4bdd184067a6d476dee12c0f1dc7e26b11b3d1690cbcf
 
 name:           haskoin-node
-version:        1.0.0
+version:        0.5.0
 synopsis:       Haskoin Node P2P library for Bitcoin and Bitcoin Cash
 description:    Bitcoin and Bitcoin Cash peer-to-peer protocol library featuring headers-first synchronisation.
 category:       Bitcoin, Finance, Network
