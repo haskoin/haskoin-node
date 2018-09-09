@@ -211,9 +211,16 @@ connectPeer sa = do
         Just v -> do
             now <- computeTime
             let v' = v {getPeerLastConnect = now}
-            writeBatch
-                db
-                [deleteOp v, insertOp v' k, insertOp k v']
+            writeBatch db [deleteOp v, insertOp v' k, insertOp k v']
+            logPeersConnected
+
+
+logPeersConnected :: MonadManager n m => m ()
+logPeersConnected = do
+    mo <- mgrConfMaxPeers <$> asks myConfig
+    ps <- getOnlinePeers
+    $(logInfoS) "Manager" $
+        "Peers connected: " <> cs (show (length ps)) <> "/" <> cs (show mo)
 
 storePeer :: MonadManager n m => SockAddr -> Priority -> m ()
 storePeer sa prio = do
@@ -447,6 +454,7 @@ processPeerOffline op
         asks myChain >>= chainRemovePeer p
         l <- mgrConfMgrListener <$> asks myConfig
         atomically (l (ManagerDisconnect p))
+        logPeersConnected
     | otherwise =
         $(logWarnS) "Manager" $
         "Could not connect to peer " <> cs (show (onlinePeerAddress op))
@@ -462,14 +470,9 @@ connectNewPeers = do
     mo <- mgrConfMaxPeers <$> asks myConfig
     ps <- getOnlinePeers
     let n = mo - length ps
-    case ps of
-        [] -> do
-            $(logInfoS) "Manager" "No peers connected"
-            ps' <- resolvePeers
-            mapM_ (uncurry storePeer) ps'
-        _ ->
-            $(logInfoS) "Manager" $
-            "Peers connected: " <> cs (show (length ps)) <> "/" <> cs (show mo)
+    when (null ps) $ do
+        ps' <- resolvePeers
+        mapM_ (uncurry storePeer) ps'
     go n
   where
     go 0 = return ()
