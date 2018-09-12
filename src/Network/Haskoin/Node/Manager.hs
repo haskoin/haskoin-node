@@ -11,8 +11,6 @@ module Network.Haskoin.Node.Manager
     ) where
 
 import           Control.Applicative
-import           Control.Concurrent.NQE
-import           Control.Concurrent.Unique
 import           Control.Monad
 import           Control.Monad.Except
 import           Control.Monad.Logger
@@ -37,6 +35,7 @@ import           Network.Haskoin.Network
 import           Network.Haskoin.Node.Common
 import           Network.Haskoin.Node.Peer
 import           Network.Socket              (SockAddr (..))
+import           NQE
 import           System.Random
 import           UnliftIO
 import           UnliftIO.Concurrent
@@ -49,12 +48,12 @@ type MonadManager n m
        , MonadLoggerIO m
        , MonadReader (ManagerReader n) m)
 
-data ManagerReader n = ManagerReader
+data ManagerReader m = ManagerReader
     { mySelf           :: !Manager
     , myChain          :: !Chain
-    , myConfig         :: !(ManagerConfig n)
+    , myConfig         :: !ManagerConfig
     , myPeerDB         :: !DB
-    , myPeerSupervisor :: !(PeerSupervisor n)
+    , myPeerSupervisor :: !(Inbox (SupervisorMessage m))
     , onlinePeers      :: !(TVar [OnlinePeer])
     , myBloomFilter    :: !(TVar (Maybe BloomFilter))
     , myBestBlock      :: !(TVar BlockNode)
@@ -129,26 +128,30 @@ instance Serialize PeerTimeAddress where
         S.put getPeerTimeAddress
     put PeerTimeAddressBase = S.putWord8 0x80
 
-manager :: (MonadUnliftIO m, MonadLoggerIO m) => ManagerConfig m -> m ()
+manager :: (MonadUnliftIO m, MonadLoggerIO m) => ManagerConfig -> m ()
 manager cfg = do
-    bb <- chainGetBest $ mgrConfChain cfg
-    opb <- newTVarIO []
-    bfb <- newTVarIO Nothing
-    bbb <- newTVarIO bb
-    withConnectLoop (mgrConfManager cfg) $ do
-        let rd =
-                ManagerReader
-                { mySelf = mgrConfManager cfg
-                , myChain = mgrConfChain cfg
-                , myConfig = cfg
-                , myPeerDB = mgrConfDB cfg
-                , myPeerSupervisor = mgrConfPeerSupervisor cfg
-                , onlinePeers = opb
-                , myBloomFilter = bfb
-                , myBestBlock = bbb
-                }
-        run `runReaderT` rd
+    psup <- newInbox =<< newTQueueIO
+    withAsync (supervisor (Notify dead) psup []) $ \sup -> do
+        link sup
+        bb <- chainGetBest $ mgrConfChain cfg
+        opb <- newTVarIO []
+        bfb <- newTVarIO Nothing
+        bbb <- newTVarIO bb
+        withConnectLoop (mgrConfManager cfg) $ do
+            let rd =
+                    ManagerReader
+                        { mySelf = mgrConfManager cfg
+                        , myChain = mgrConfChain cfg
+                        , myConfig = cfg
+                        , myPeerDB = mgrConfDB cfg
+                        , myPeerSupervisor = psup
+                        , onlinePeers = opb
+                        , myBloomFilter = bfb
+                        , myBestBlock = bbb
+                        }
+            run `runReaderT` rd
   where
+    dead ex = PeerStopped ex `sendSTM` mgrConfManager cfg
     run = do
         connectNewPeers
         managerLoop
@@ -335,6 +338,7 @@ processManagerMessage ManagerPing = connectNewPeers
 
 processManagerMessage (ManagerGetAddr p) = do
     pn <- peerString p
+    -- TODO: send list of peers we know about
     $(logWarnS) "Manager" $ "Ignoring address request from peer " <> fromString pn
 
 processManagerMessage (ManagerNewPeers p as) =
@@ -403,7 +407,7 @@ processManagerMessage (ManagerSetPeerVersion p v) =
         bf <- readTVarIO bfb
         case bf of
             Nothing -> return ()
-            Just b -> b `peerSetFilter` p
+            Just b  -> b `peerSetFilter` p
     askForPeers =
         mgrConfDiscover <$> asks myConfig >>= \discover ->
             when discover (MGetAddr `sendMessage` p)
@@ -487,13 +491,10 @@ connectNewPeers = do
         pl <- mgrConfPeerListener <$> asks myConfig
         net <- mgrConfNetwork <$> asks myConfig
         $(logInfoS) "Manager" $ "Connecting to peer " <> cs (show sa)
-        bbb <- asks myBestBlock
-        bb <- readTVarIO bbb
         nonce <- liftIO randomIO
         let pc =
                 PeerConfig
                     { peerConfConnect = NetworkAddress (srv net) sa
-                    , peerConfInitBest = bb
                     , peerConfLocal = ad
                     , peerConfManager = mgr
                     , peerConfChain = ch
@@ -503,8 +504,7 @@ connectNewPeers = do
                     }
         psup <- asks myPeerSupervisor
         pmbox <- newTBQueueIO 100
-        uid <- liftIO newUnique
-        let p = UniqueInbox {uniqueInbox = Inbox pmbox, uniqueId = uid}
+        p <- newInbox pmbox
         a <- psup `addChild` peer pc p
         newPeerConnection net sa nonce p a
     srv net

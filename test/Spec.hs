@@ -3,23 +3,18 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings     #-}
 {-# LANGUAGE RecordWildCards       #-}
-import           Control.Concurrent.NQE
 import           Control.Monad
 import           Control.Monad.Logger
 import           Control.Monad.Trans
-import qualified Data.ByteString             as BS
+import qualified Data.ByteString      as BS
 import           Data.Either
 import           Data.Maybe
 import           Data.Serialize
-import qualified Database.RocksDB            as RocksDB
-import           Network.Haskoin.Address
-import           Network.Haskoin.Block
-import           Network.Haskoin.Constants
-import           Network.Haskoin.Keys
-import           Network.Haskoin.Network
-import           Network.Haskoin.Node
-import           Network.Haskoin.Transaction
-import           Network.Socket              (SockAddr (..))
+import qualified Database.RocksDB     as RocksDB
+import           Haskoin
+import           Haskoin.Node
+import           Network.Socket       (SockAddr (..))
+import           NQE
 import           System.Random
 import           Test.Hspec
 import           UnliftIO
@@ -201,33 +196,24 @@ withTestNode ::
     -> m ()
 withTestNode net t f =
     runNoLoggingT . withSystemTempDirectory ("haskoin-node-test-" <> t <> "-") $ \w -> do
-        events <- Inbox <$> liftIO newTQueueIO
-        ch <- Inbox <$> liftIO newTQueueIO
-        ns <- Inbox <$> liftIO newTQueueIO
-        mgr <- Inbox <$> liftIO newTQueueIO
+        events <- newInbox =<< newTQueueIO
         db <-
             RocksDB.open
                 w
                 RocksDB.defaultOptions
-                { RocksDB.createIfMissing = True
-                , RocksDB.compression = RocksDB.SnappyCompression
-                }
+                    { RocksDB.createIfMissing = True
+                    , RocksDB.compression = RocksDB.SnappyCompression
+                    }
         let cfg =
                 NodeConfig
-                { maxPeers = 20
-                , database = db
-                , initPeers = []
-                , discover = True
-                , nodeEvents = (`sendSTM` events)
-                , netAddress = NetworkAddress 0 (SockAddrInet 0 0)
-                , nodeSupervisor = ns
-                , nodeChain = ch
-                , nodeManager = mgr
-                , nodeNet = net
-                }
-        withAsync (node cfg) $ \nd -> do
-            link nd
+                    { maxPeers = 20
+                    , database = db
+                    , initPeers = []
+                    , discover = True
+                    , nodeEvents = (`sendSTM` events)
+                    , netAddress = NetworkAddress 0 (SockAddrInet 0 0)
+                    , nodeNet = net
+                    }
+        withNode cfg $ \(mgr, ch) ->
             lift $
-                f TestNode {testMgr = mgr, testChain = ch, testEvents = events}
-            stopSupervisor ns
-            wait nd
+            f TestNode {testMgr = mgr, testChain = ch, testEvents = events}

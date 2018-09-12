@@ -13,7 +13,6 @@ module Network.Haskoin.Node.Chain
 ( chain
 ) where
 
-import           Control.Concurrent.NQE
 import           Control.Monad
 import           Control.Monad.Logger
 import           Control.Monad.Reader
@@ -29,6 +28,7 @@ import           Database.RocksDB.Query      as R
 import           Network.Haskoin.Block
 import           Network.Haskoin.Network
 import           Network.Haskoin.Node.Common
+import           NQE
 import           UnliftIO
 
 type MonadChain m
@@ -236,23 +236,13 @@ processSyncQueue = do
   where
     go s bb =
         case newPeers s of
-            [] -> do
-                t <- computeTime
-                let h2 = t - 2 * 60 * 60
-                    tg = blockTimestamp (nodeHeader bb) > h2
-                if tg
-                    then unless (mySynced s) $ do
-                             l <- chainConfListener <$> asks myConfig
-                             st <- asks chainState
-                             atomically $ do
-                                 l (ChainSynced bb)
-                                 writeTVar st s {mySynced = True}
-                    else do
-                        l <- chainConfListener <$> asks myConfig
-                        st <- asks chainState
-                        atomically $ do
-                            l (ChainNotSynced bb)
-                            writeTVar st s {mySynced = False}
+            [] ->
+                unless (mySynced s) $ do
+                    l <- chainConfListener <$> asks myConfig
+                    st <- asks chainState
+                    atomically $ do
+                        l (ChainSynced bb)
+                        writeTVar st s {mySynced = True}
             p:_ -> syncHeaders bb p
 
 syncHeaders :: MonadChain m => BlockNode -> Peer -> m ()
