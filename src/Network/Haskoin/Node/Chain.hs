@@ -168,7 +168,9 @@ processChainMessage (ChainNewHeaders p hcs) = do
             l <- chainConfListener <$> asks myConfig
             atomically . l $ ChainNewBest bb'
         case length hcs of
-            0 -> synced
+            0 -> do
+                upeer bb
+                synced
             2000 ->
                 case spM of
                     Just sp
