@@ -492,15 +492,18 @@ connectNewPeers = do
         net <- mgrConfNetwork <$> asks myConfig
         $(logInfoS) "Manager" $ "Connecting to peer " <> cs (show sa)
         nonce <- liftIO randomIO
+        bb <- chainGetBest ch
+        let rmt = NetworkAddress (srv net) sa
+        ver <- buildVersion net nonce (nodeHeight bb) ad rmt
         let pc =
                 PeerConfig
-                    { peerConfConnect = NetworkAddress (srv net) sa
-                    , peerConfLocal = ad
-                    , peerConfManager = mgr
+                    { peerConfManager = mgr
                     , peerConfChain = ch
                     , peerConfListener = pl
-                    , peerConfNonce = nonce
                     , peerConfNetwork = net
+                    , peerConfName = cs $ show sa
+                    , peerConfConnect = withConnection sa
+                    , peerConfVersion = ver
                     }
         psup <- asks myPeerSupervisor
         pmbox <- newTBQueueIO 100
