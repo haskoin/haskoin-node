@@ -6,6 +6,7 @@
 {-# LANGUAGE TemplateHaskell       #-}
 {-# LANGUAGE TupleSections         #-}
 {-# LANGUAGE TypeFamilies          #-}
+{-# LANGUAGE RecordWildCards       #-}
 module Network.Haskoin.Node.Peer
     ( peer
     ) where
@@ -36,6 +37,7 @@ import           Network.Socket              (SockAddr)
 import           NQE
 import           System.Random
 import           UnliftIO
+import           Data.Text                   (Text)
 
 type MonadPeer m = (MonadUnliftIO m, MonadLoggerIO m, MonadReader PeerReader m)
 
@@ -49,8 +51,7 @@ data Pending
 data PeerReader = PeerReader
     { mySelf     :: !Peer
     , myConfig   :: !PeerConfig
-    , mySockAddr :: !SockAddr
-    , myHostPort :: !(Host, Port)
+    , myPeerName :: !Text
     , myPending  :: !(TVar [(Pending, Word32)])
     }
 
@@ -61,50 +62,41 @@ logMsg :: IsString a => Message -> a
 logMsg = fromString . cs . commandToString . msgType
 
 logPeer ::
-       (ConvertibleStrings String a, Semigroup a, IsString a) => SockAddr -> a
-logPeer sa = "Peer<" <> cs (show sa) <> ">"
+       (ConvertibleStrings Text a, Semigroup a, IsString a) => Text -> a
+logPeer sa = "Peer<" <> cs sa <> ">"
 
 peer :: (MonadUnliftIO m, MonadLoggerIO m) => PeerConfig -> Peer -> m ()
-peer pc p =
-    fromSockAddr na >>= \case
-        Nothing -> do
-            $(logErrorS) (logPeer na) "Invalid network address"
-            throwIO PeerAddressInvalid
-        Just (host, port) -> do
-            let cset = clientSettings port (C8.pack host)
-            runGeneralTCPClient cset (peerSession (host, port))
-  where
-    na = naAddress (peerConfConnect pc)
-    go = handshake >> exchangePing >> peerLoop
-    net = peerConfNetwork pc
-    peerSession hp ad = do
-        let src =
-                runConduit $
-                appSource ad .| inPeerConduit net .| conduitMailbox p
-            snk = outPeerConduit net .| appSink ad
-        withAsync src $ \as -> do
-            link as
+peer pc@PeerConfig {..} p = withRunInIO $ \io ->
+    peerConfConnect $ \nc ->
+        io $ do
             pbox <- newTVarIO []
             let rd =
                     PeerReader
                         { myConfig = pc
                         , mySelf = p
-                        , myHostPort = hp
-                        , mySockAddr = na
+                        , myPeerName = peerConfName
                         , myPending = pbox
                         }
-            runReaderT (runConduit (go .| snk)) rd
+            runReaderT (peerSession nc) rd
+  where
+    go = handshake >> exchangePing >> peerLoop
+    net = peerConfNetwork
+    peerSession nc = do
+        let ins = transPipe liftIO (getNetSource nc)
+            ons = transPipe liftIO (getNetSink nc)
+            src =
+                runConduit $
+                ins .| inPeerConduit net .| conduitMailbox p
+            snk = outPeerConduit net .| ons
+        withAsync src $ \as -> do
+            link as
+            runConduit (go .| snk)
 
 handshake :: MonadPeer m => ConduitT () Message m ()
 handshake = do
     p <- asks mySelf
-    ch <- peerConfChain <$> asks myConfig
-    rmt <- peerConfConnect <$> asks myConfig
-    loc <- peerConfLocal <$> asks myConfig
     net <- peerConfNetwork <$> asks myConfig
-    nonce <- peerConfNonce <$> asks myConfig
-    bb <- chainGetBest ch
-    ver <- buildVersion net nonce (nodeHeight bb) loc rmt
+    ver <- peerConfVersion <$> asks myConfig
     yield $ MVersion ver
     lift (remoteVer p) >>= \case
         v
@@ -257,13 +249,13 @@ processMessage m = do
             incoming msg
 
 logMe ::
-       ( ConvertibleStrings String a
+       ( ConvertibleStrings Text a
        , Semigroup a
        , IsString a
        , MonadReader PeerReader m
        )
     => m a
-logMe = logPeer <$> asks mySockAddr
+logMe = logPeer . peerConfName <$> asks myConfig
 
 incoming :: MonadPeer m => Message -> ConduitT () Message m ()
 incoming m = do

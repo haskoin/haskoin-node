@@ -1,7 +1,7 @@
-{-# LANGUAGE FlexibleContexts      #-}
-{-# LANGUAGE LambdaCase            #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE RankNTypes            #-}
+{-# LANGUAGE FlexibleContexts          #-}
+{-# LANGUAGE LambdaCase                #-}
+{-# LANGUAGE MultiParamTypeClasses     #-}
+{-# LANGUAGE RankNTypes                #-}
 module Network.Haskoin.Node.Common where
 
 import           Data.ByteString             (ByteString)
@@ -21,6 +21,10 @@ import           Network.Socket              (AddrInfo (..), AddrInfoFlag (..),
 import           NQE
 import           Text.Read
 import           UnliftIO
+import           Conduit
+import           Data.Conduit.Network
+import           Data.String.Conversions
+import           Data.Text                   (Text)
 
 type HostPort = (Host, Port)
 type Host = String
@@ -216,20 +220,20 @@ data ChainEvent
 
 -- | Configuration for a particular peer.
 data PeerConfig = PeerConfig
-    { peerConfConnect  :: !NetworkAddress
-      -- ^ address of remote peer
-    , peerConfLocal    :: !NetworkAddress
-      -- ^ our address to send to peer
-    , peerConfManager  :: !Manager
+    { peerConfManager  :: !Manager
       -- ^ peer manager mailbox
     , peerConfChain    :: !Chain
       -- ^ chain process mailbox
     , peerConfListener :: !(Listen (Peer, PeerEvent))
       -- ^ listener for peer events
-    , peerConfNonce    :: !Word64
-      -- ^ our random nonce to send to peer
     , peerConfNetwork  :: !Network
       -- ^ network constants
+    , peerConfName     :: !Text 
+      -- ^ peer name
+    , peerConfConnect  :: !((NetConduits IO -> IO ()) -> IO ()) 
+      -- ^ peer connection
+    , peerConfVersion  :: !Version 
+      -- ^ peer version
     }
 
 -- | Reasons why a peer may stop working.
@@ -291,6 +295,11 @@ data PeerEvent
 data PeerMessage
     = PeerOutgoing !Message
     | PeerIncoming !Message
+
+data NetConduits m = NetConduits 
+  { getNetSource :: ConduitT () ByteString m ()
+  , getNetSink :: ConduitT ByteString Void m ()
+  }
 
 -- | Convert a host and port into a list of matching 'SockAddr'.
 toSockAddr :: (MonadUnliftIO m) => HostPort -> m [SockAddr]
@@ -486,3 +495,15 @@ chainBlockMain bh ch =
 -- | Is chain in sync with network?
 chainIsSynced :: MonadIO m => Chain -> m Bool
 chainIsSynced ch = ChainIsSynced `query` ch
+
+-- | Connect to the network
+withConnection :: (MonadUnliftIO m) => SockAddr -> (NetConduits m -> m a) -> m a
+withConnection na f =
+    fromSockAddr na >>= \case
+        Nothing ->
+            throwIO PeerAddressInvalid
+        Just (host, port) ->
+            let cset = clientSettings port (cs host)
+            in runGeneralTCPClient cset $ \ad -> 
+              let nc = NetConduits (appSource ad) (appSink ad)
+              in f nc
