@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
+## 0.7.0
+### Changed
+- New version of `rocksdb-query`.
+- Add `data-default` dependency.
+- Refactor peer to make it easier to test in the future.
+
 ## 0.6.1
 ### Changed
 - Fix bug where peer height did not update in certain cases.

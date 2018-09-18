@@ -17,6 +17,7 @@ import           Control.Monad
 import           Control.Monad.Logger
 import           Control.Monad.Reader
 import qualified Data.ByteString             as BS
+import           Data.Default
 import           Data.Either
 import           Data.List                   (delete, nub)
 import           Data.Maybe
@@ -76,10 +77,10 @@ instance (Monad m, MonadLoggerIO m, MonadReader ChainReader m) =>
         insert db (BlockHeaderKey (headerHash (nodeHeader bn))) bn
     getBlockHeader bh = do
         db <- asks headerDB
-        retrieve db Nothing (BlockHeaderKey bh)
+        retrieve db def (BlockHeaderKey bh)
     getBestBlockHeader = do
         db <- asks headerDB
-        retrieve db Nothing BestBlockKey >>= \case
+        retrieve db def BestBlockKey >>= \case
             Nothing -> error "Could not get best block from database"
             Just b -> return b
     setBestBlockHeader bn = do
@@ -109,7 +110,7 @@ chain cfg = do
     net = chainConfNetwork cfg
     run = do
         db <- asks headerDB
-        m :: Maybe BlockNode <- retrieve db Nothing BestBlockKey
+        m :: Maybe BlockNode <- retrieve db def BestBlockKey
         when (isNothing m) $ do
             addBlockHeader (genesisNode net)
             insert db BestBlockKey (genesisNode net)

@@ -19,6 +19,7 @@ import           Data.Bits
 import qualified Data.ByteString             as BS
 import           Data.Conduit
 import qualified Data.Conduit.Combinators    as CC
+import           Data.Default
 import           Data.Function
 import           Data.List
 import           Data.Maybe
@@ -209,7 +210,7 @@ connectPeer :: MonadManager n m => SockAddr -> m ()
 connectPeer sa = do
     db <- asks myPeerDB
     let k = PeerAddress sa
-    retrieve db Nothing k >>= \case
+    retrieve db def k >>= \case
         Nothing -> error "Could not find peer to mark connected"
         Just v -> do
             now <- computeTime
@@ -229,7 +230,7 @@ storePeer :: MonadManager n m => SockAddr -> Priority -> m ()
 storePeer sa prio = do
     db <- asks myPeerDB
     let k = PeerAddress sa
-    retrieve db Nothing k >>= \case
+    retrieve db def k >>= \case
         Nothing -> do
             let v =
                     PeerTimeAddress
@@ -255,7 +256,7 @@ banPeer :: MonadManager n m => SockAddr -> m ()
 banPeer sa = do
     db <- asks myPeerDB
     let k = PeerAddress sa
-    retrieve db Nothing k >>= \case
+    retrieve db def k >>= \case
         Nothing -> error "Cannot find peer to be banned"
         Just v -> do
             now <- computeTime
@@ -273,7 +274,7 @@ backoffPeer sa = do
     db <- asks myPeerDB
     onlinePeers <- map onlinePeerAddress <$> getOnlinePeers
     let k = PeerAddress sa
-    retrieve db Nothing k >>= \case
+    retrieve db def k >>= \case
         Nothing -> error "Cannot find peer to backoff in database"
         Just v -> do
             now <- computeTime
@@ -301,7 +302,7 @@ getNewPeer = do
             db <- asks myPeerDB
             now <- computeTime
             runResourceT . runConduit $
-                matching db Nothing PeerTimeAddressBase .|
+                matching db def PeerTimeAddressBase .|
                 CC.filter ((<= now) . getPeerNextConnect . fst) .|
                 CC.map (getPeerAddress . snd) .|
                 CC.find (not . (`elem` online_peers))
