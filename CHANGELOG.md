@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 - New version of `rocksdb-query`.
 - Add `data-default` dependency.
 - Refactor peer to make it easier to test in the future.
+- Connect to one peer at a time.
 
 ## 0.6.1
 ### Changed

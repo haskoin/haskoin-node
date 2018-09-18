@@ -473,18 +473,16 @@ getOnlinePeer p = find ((== p) . onlinePeerMailbox) <$> getConnectedPeers
 connectNewPeers :: MonadManager n m => m ()
 connectNewPeers = do
     mo <- mgrConfMaxPeers <$> asks myConfig
-    ps <- getOnlinePeers
-    let n = mo - length ps
-    when (null ps) $ do
+    os <- getOnlinePeers
+    when (null os) $ do
         ps' <- resolvePeers
         mapM_ (uncurry storePeer) ps'
-    go n
-  where
-    go 0 = return ()
-    go n =
+    os' <- getOnlinePeers
+    when (length os' < mo) $
         getNewPeer >>= \case
             Nothing -> return ()
-            Just sa -> conn sa >> go (n - 1)
+            Just sa -> conn sa
+  where
     conn sa = do
         ad <- mgrConfNetAddr <$> asks myConfig
         mgr <- asks mySelf
