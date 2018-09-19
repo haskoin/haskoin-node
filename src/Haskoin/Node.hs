@@ -13,7 +13,6 @@ module Haskoin.Node
     , PeerException(..)
     , withNode
     , managerGetPeerVersion
-    , managerGetPeerBest
     , managerGetPeers
     , managerGetPeer
     , managerKill

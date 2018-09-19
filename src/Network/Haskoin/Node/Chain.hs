@@ -156,9 +156,6 @@ processChainMessage (ChainNewHeaders p hcs) = do
         atomically . modifyTVar st $ \s -> s {syncingPeer = Nothing}
         MSendHeaders `sendMessage` p
         processSyncQueue
-    upeer bb = do
-        mgr <- chainConfManager <$> asks myConfig
-        managerSetPeerBest p bb mgr
     conn bb bhs spM = do
         bb' <- getBestBlockHeader
         when (bb /= bb') $ do
@@ -169,22 +166,16 @@ processChainMessage (ChainNewHeaders p hcs) = do
             l <- chainConfListener <$> asks myConfig
             atomically . l $ ChainNewBest bb'
         case length hcs of
-            0 -> do
-                upeer bb
-                synced
+            0 -> synced
             2000 ->
                 case spM of
                     Just sp
-                        | sp == p -> do
-                            upeer $ head bhs
-                            syncHeaders (head bhs) p
+                        | sp == p -> syncHeaders (head bhs) p
                     _ -> do
                         st <- asks chainState
                         atomically . modifyTVar st $ \s ->
                             s {newPeers = nub $ p : newPeers s}
-            _ -> do
-                upeer $ head bhs
-                synced
+            _ -> synced
 
 processChainMessage (ChainNewPeer p) = do
     st <- asks chainState

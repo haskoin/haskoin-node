@@ -46,8 +46,6 @@ data OnlinePeer = OnlinePeer
       -- ^ user agent string
     , onlinePeerRelay       :: !Bool
       -- ^ peer will relay transactions (BIP-37)
-    , onlinePeerBestBlock   :: !BlockNode
-      -- ^ estimated best block that peer has
     , onlinePeerAsync       :: !(Async ())
       -- ^ peer asynchronous process
     , onlinePeerMailbox     :: !Peer
@@ -145,12 +143,6 @@ data ManagerMessage
     | ManagerKill !PeerException
                   !Peer
       -- ^ please kill this peer with supplied exception
-    | ManagerSetPeerBest !Peer
-                         !BlockNode
-      -- ^ set best block for this peer
-    | ManagerGetPeerBest !Peer
-                         !(Reply (Maybe BlockNode))
-      -- ^ get best block that manager thinks peer has
     | ManagerSetPeerVersion !Peer
                             !Version
       -- ^ set version for this peer
@@ -350,14 +342,6 @@ managerSetPeerVersion p v mgr = ManagerSetPeerVersion p v `send` mgr
 -- | Get version of peer from manager.
 managerGetPeerVersion :: MonadIO m => Peer -> Manager -> m (Maybe Word32)
 managerGetPeerVersion p mgr = ManagerGetPeerVersion p `query` mgr
-
--- | Get best block for peer from manager.
-managerGetPeerBest :: MonadIO m => Peer -> Manager -> m (Maybe BlockNode)
-managerGetPeerBest p mgr = ManagerGetPeerBest p `query` mgr
-
--- | Set best block for peer in manager.
-managerSetPeerBest :: MonadIO m => Peer -> BlockNode -> Manager -> m ()
-managerSetPeerBest p bn mgr = ManagerSetPeerBest p bn `send` mgr
 
 -- | Get list of peers from manager.
 managerGetPeers :: MonadIO m => Manager -> m [OnlinePeer]

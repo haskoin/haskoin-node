@@ -77,8 +77,8 @@ instance Serialize PeerAddress where
         encodeSockAddr getPeerAddress
     put PeerAddressBase = S.putWord8 0x81
 
-data PeerAddressData
-    = PeerAddressData { getPeerLastConnect :: !Word32 }
+newtype PeerAddressData
+    = PeerAddressData { getPeerLastConnect :: Word32 }
     deriving (Eq, Show)
 
 instance KeyValue PeerAddress PeerAddressData
@@ -116,9 +116,7 @@ manager cfg = do
             run `runReaderT` rd
   where
     dead ex = PeerStopped ex `sendSTM` mgrConfManager cfg
-    run = do
-        connectNewPeers
-        managerLoop
+    run = managerLoop
 
 initialPeers :: (MonadUnliftIO m, MonadManager n m) => m [SockAddr]
 initialPeers = do
@@ -210,6 +208,9 @@ getNewPeer = do
             case ps of
                 [] -> return Nothing
                 _ -> do
+                    $(logDebugS) "Manager" $
+                        "Selecting a peer out of " <> cs (show (length ps)) <>
+                        " available"
                     i <- liftIO $ randomRIO (0, length ps - 1)
                     return . Just . getPeerAddress . fst $
                         (ps :: [(PeerAddress, PeerAddressData)]) !! i
@@ -224,15 +225,13 @@ withConnectLoop mgr f = withAsync go $ const f
     go =
         forever $ do
             ManagerPing `send` mgr
-            i <- liftIO (randomRIO (30, 90))
-            threadDelay (i * 1000 * 1000)
+            i <- liftIO (randomRIO (100000, 900000))
+            threadDelay i
 
 managerLoop :: (MonadUnliftIO m, MonadManager n m) => m ()
-managerLoop =
-    forever $ do
-        mgr <- asks mySelf
-        msg <- receive mgr
-        processManagerMessage msg
+managerLoop = do
+    mgr <- asks mySelf
+    forever $ receive mgr >>= processManagerMessage
 
 processManagerMessage ::
        (MonadUnliftIO m, MonadManager n m) => ManagerMessage -> m ()
@@ -270,13 +269,6 @@ processManagerMessage (ManagerKill e p) =
             $(logErrorS) "Manager" $
                 "Killing peer " <> cs (show (onlinePeerAddress op))
             onlinePeerAsync op `cancelWith` e
-
-processManagerMessage (ManagerSetPeerBest p bn) = modifyPeer f p
-  where
-    f op = op {onlinePeerBestBlock = bn}
-
-processManagerMessage (ManagerGetPeerBest p reply) =
-    findPeer p >>= \op -> atomically (reply (fmap onlinePeerBestBlock op))
 
 processManagerMessage (ManagerSetPeerVersion p v) =
     modifyPeer f p >> findPeer p >>= \case
@@ -374,13 +366,11 @@ connectNewPeers :: MonadManager n m => m ()
 connectNewPeers = do
     mo <- mgrConfMaxPeers <$> asks myConfig
     os <- getOnlinePeers
-    when (null os) $ do
-        ps' <- initialPeers
-        mapM_ storePeer ps'
-    os' <- getOnlinePeers
-    when (length os' < mo) $
+    when (length os < mo) $
         getNewPeer >>= \case
-            Nothing -> return ()
+            Nothing -> do
+                $(logInfoS) "Manager" "Populating empty peer list..."
+                initialPeers >>= mapM_ storePeer
             Just sa -> conn sa
   where
     conn sa = do
@@ -408,20 +398,19 @@ connectNewPeers = do
         pmbox <- newTBQueueIO 100
         p <- newInbox pmbox
         a <- psup `addChild` peer pc p
-        newPeerConnection net sa nonce p a
+        newPeerConnection sa nonce p a
     srv net
         | getSegWit net = 8
         | otherwise = 0
 
 newPeerConnection ::
        MonadManager n m
-    => Network
-    -> SockAddr
+    => SockAddr
     -> Word64
     -> Peer
     -> Async ()
     -> m ()
-newPeerConnection net sa nonce p a =
+newPeerConnection sa nonce p a =
     addPeer
         OnlinePeer
         { onlinePeerAddress = sa
@@ -431,7 +420,6 @@ newPeerConnection net sa nonce p a =
         , onlinePeerRemoteNonce = 0
         , onlinePeerUserAgent = BS.empty
         , onlinePeerRelay = False
-        , onlinePeerBestBlock = genesisNode net
         , onlinePeerAsync = a
         , onlinePeerMailbox = p
         , onlinePeerNonce = nonce
