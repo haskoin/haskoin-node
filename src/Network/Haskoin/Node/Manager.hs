@@ -10,6 +10,7 @@ module Network.Haskoin.Node.Manager
     ( manager
     ) where
 
+import           Conduit
 import           Control.Applicative
 import           Control.Monad
 import           Control.Monad.Except
@@ -17,8 +18,6 @@ import           Control.Monad.Logger
 import           Control.Monad.Reader
 import           Data.Bits
 import qualified Data.ByteString             as BS
-import           Data.Conduit
-import qualified Data.Conduit.Combinators    as CC
 import           Data.Default
 import           Data.Function
 import           Data.List
@@ -29,7 +28,7 @@ import           Data.String
 import           Data.String.Conversions
 import           Data.Word
 import           Database.RocksDB            (DB)
-import           Database.RocksDB.Query
+import           Database.RocksDB.Query      as R
 import           Network.Haskoin.Block
 import           Network.Haskoin.Constants
 import           Network.Haskoin.Network
@@ -40,7 +39,7 @@ import           NQE
 import           System.Random
 import           UnliftIO
 import           UnliftIO.Concurrent
-import           UnliftIO.Resource
+import           UnliftIO.Resource           as U
 
 type MonadManager n m
      = ( MonadUnliftIO n
@@ -60,27 +59,10 @@ data ManagerReader m = ManagerReader
     , myBestBlock      :: !(TVar BlockNode)
     }
 
-data Priority
-    = PriorityNetwork
-    | PrioritySeed
-    | PriorityManual
-    deriving (Eq, Show, Ord)
-
 data PeerAddress
     = PeerAddress { getPeerAddress :: SockAddr }
     | PeerAddressBase
     deriving (Eq, Show)
-
-instance Serialize Priority where
-    get =
-        S.getWord8 >>= \case
-            0x00 -> return PriorityManual
-            0x01 -> return PrioritySeed
-            0x02 -> return PriorityNetwork
-            _ -> mzero
-    put PriorityManual  = S.putWord8 0x00
-    put PrioritySeed    = S.putWord8 0x01
-    put PriorityNetwork = S.putWord8 0x02
 
 instance Serialize PeerAddress where
     get = do
@@ -95,39 +77,20 @@ instance Serialize PeerAddress where
         encodeSockAddr getPeerAddress
     put PeerAddressBase = S.putWord8 0x81
 
-data PeerTimeAddress
-    = PeerTimeAddress { getPeerPrio        :: !Priority
-                      , getPeerBanned      :: !Word32
-                      , getPeerLastConnect :: !Word32
-                      , getPeerNextConnect :: !Word32
-                      , getPeerTimeAddress :: !PeerAddress }
-    | PeerTimeAddressBase
+data PeerAddressData
+    = PeerAddressData { getPeerLastConnect :: !Word32 }
     deriving (Eq, Show)
 
-instance Key PeerTimeAddress
-instance KeyValue PeerAddress PeerTimeAddress
-instance KeyValue PeerTimeAddress PeerAddress
+instance KeyValue PeerAddress PeerAddressData
 
-instance Serialize PeerTimeAddress where
+instance Serialize PeerAddressData where
     get = do
         guard . (== 0x80) =<< S.getWord8
-        record <|> return PeerTimeAddressBase
-      where
-        record = do
-            getPeerPrio <- S.get
-            getPeerBanned <- S.get
-            getPeerLastConnect <- (maxBound -) <$> S.get
-            getPeerNextConnect <- S.get
-            getPeerTimeAddress <- S.get
-            return PeerTimeAddress {..}
-    put PeerTimeAddress {..} = do
+        getPeerLastConnect <- (maxBound -) <$> S.get
+        return PeerAddressData {..}
+    put PeerAddressData {..} = do
         S.putWord8 0x80
-        S.put getPeerPrio
-        S.put getPeerBanned
         S.put (maxBound - getPeerLastConnect)
-        S.put getPeerNextConnect
-        S.put getPeerTimeAddress
-    put PeerTimeAddressBase = S.putWord8 0x80
 
 manager :: (MonadUnliftIO m, MonadLoggerIO m) => ManagerConfig -> m ()
 manager cfg = do
@@ -157,21 +120,17 @@ manager cfg = do
         connectNewPeers
         managerLoop
 
-resolvePeers :: (MonadUnliftIO m, MonadManager n m) => m [(SockAddr, Priority)]
-resolvePeers = do
+initialPeers :: (MonadUnliftIO m, MonadManager n m) => m [SockAddr]
+initialPeers = do
     cfg <- asks myConfig
     let net = mgrConfNetwork cfg
-    confPeers <-
-        fmap
-            (map (, PriorityManual) . concat)
-            (mapM toSockAddr (mgrConfPeers cfg))
+    confPeers <- concat <$> mapM toSockAddr (mgrConfPeers cfg)
     if mgrConfDiscover cfg
         then do
             seedPeers <-
-                fmap
-                    (map (, PrioritySeed) . concat)
-                    (mapM (toSockAddr . (, getDefaultPort net)) (getSeeds net))
-            return (confPeers ++ seedPeers)
+                concat <$>
+                mapM (toSockAddr . (, getDefaultPort net)) (getSeeds net)
+            return $ confPeers <> seedPeers
         else return confPeers
 
 encodeSockAddr :: SockAddr -> Put
@@ -211,11 +170,10 @@ connectPeer sa = do
     db <- asks myPeerDB
     let k = PeerAddress sa
     retrieve db def k >>= \case
-        Nothing -> error "Could not find peer to mark connected"
+        Nothing -> throwString "Could not find peer to mark connected"
         Just v -> do
             now <- computeTime
-            let v' = v {getPeerLastConnect = now}
-            writeBatch db [deleteOp v, insertOp v' k, insertOp k v']
+            R.insert db k v {getPeerLastConnect = now}
             logPeersConnected
 
 
@@ -226,71 +184,15 @@ logPeersConnected = do
     $(logInfoS) "Manager" $
         "Peers connected: " <> cs (show (length ps)) <> "/" <> cs (show mo)
 
-storePeer :: MonadManager n m => SockAddr -> Priority -> m ()
-storePeer sa prio = do
+storePeer :: MonadManager n m => SockAddr -> m ()
+storePeer sa = do
     db <- asks myPeerDB
     let k = PeerAddress sa
     retrieve db def k >>= \case
         Nothing -> do
-            let v =
-                    PeerTimeAddress
-                    { getPeerPrio = prio
-                    , getPeerBanned = 0
-                    , getPeerLastConnect = 0
-                    , getPeerNextConnect = 0
-                    , getPeerTimeAddress = k
-                    }
-            writeBatch
-                db
-                [insertOp v k, insertOp k v]
-        Just v@PeerTimeAddress {..} ->
-            when (getPeerPrio < prio) $ do
-                let v' = v {getPeerPrio = prio}
-                writeBatch
-                    db
-                    [deleteOp v, insertOp v' k, insertOp k v']
-        Just PeerTimeAddressBase ->
-            error "Key for peer is corrupted"
-
-banPeer :: MonadManager n m => SockAddr -> m ()
-banPeer sa = do
-    db <- asks myPeerDB
-    let k = PeerAddress sa
-    retrieve db def k >>= \case
-        Nothing -> error "Cannot find peer to be banned"
-        Just v -> do
-            now <- computeTime
-            let v' =
-                    v
-                        { getPeerBanned = now
-                        , getPeerNextConnect = now + 6 * 60 * 60
-                        }
-            when (getPeerPrio v == PriorityNetwork) $ do
-                $(logWarnS) "Manager" $ "Banning peer " <> cs (show sa)
-                writeBatch db [deleteOp v, insertOp k v', insertOp v' k]
-
-backoffPeer :: MonadManager n m => SockAddr -> m ()
-backoffPeer sa = do
-    db <- asks myPeerDB
-    onlinePeers <- map onlinePeerAddress <$> getOnlinePeers
-    let k = PeerAddress sa
-    retrieve db def k >>= \case
-        Nothing -> error "Cannot find peer to backoff in database"
-        Just v -> do
-            now <- computeTime
-            r <-
-                liftIO . randomRIO $
-                if null onlinePeers
-                    then (90, 300) -- Don't backoff so much if possibly offline
-                    else (900, 1800)
-            let t = max (now + r) (getPeerNextConnect v)
-                v' = v {getPeerNextConnect = t}
-            when (getPeerPrio v == PriorityNetwork) $ do
-                $(logWarnS) "Manager" $
-                    "Backing off peer " <> cs (show sa) <> " for " <>
-                    cs (show r) <>
-                    " seconds"
-                writeBatch db [deleteOp v, insertOp k v', insertOp v' k]
+            let v = PeerAddressData {getPeerLastConnect = 0}
+            R.insert db k v
+        Just PeerAddressData {} -> return ()
 
 getNewPeer :: (MonadUnliftIO m, MonadManager n m) => m (Maybe SockAddr)
 getNewPeer = do
@@ -300,12 +202,17 @@ getNewPeer = do
     if mgrConfDiscover
         then do
             db <- asks myPeerDB
-            now <- computeTime
-            runResourceT . runConduit $
-                matching db def PeerTimeAddressBase .|
-                CC.filter ((<= now) . getPeerNextConnect . fst) .|
-                CC.map (getPeerAddress . snd) .|
-                CC.find (not . (`elem` online_peers))
+            ps <-
+                U.runResourceT . runConduit $
+                matching db def PeerAddressBase .|
+                filterC (not . (`elem` online_peers) . getPeerAddress . fst) .|
+                sinkList
+            case ps of
+                [] -> return Nothing
+                _ -> do
+                    i <- liftIO $ randomRIO (0, length ps - 1)
+                    return . Just . getPeerAddress . fst $
+                        (ps :: [(PeerAddress, PeerAddressData)]) !! i
         else return $ find (not . (`elem` online_peers)) config_peers
 
 getConnectedPeers :: MonadManager n m => m [OnlinePeer]
@@ -354,7 +261,7 @@ processManagerMessage (ManagerNewPeers p as) =
                     fromString pn
                 forM_ as $ \(_, na) ->
                     let sa = naAddress na
-                    in storePeer sa PriorityNetwork
+                    in storePeer sa
 
 processManagerMessage (ManagerKill e p) =
     findPeer p >>= \case
@@ -362,7 +269,6 @@ processManagerMessage (ManagerKill e p) =
         Just op -> do
             $(logErrorS) "Manager" $
                 "Killing peer " <> cs (show (onlinePeerAddress op))
-            banPeer $ onlinePeerAddress op
             onlinePeerAsync op `cancelWith` e
 
 processManagerMessage (ManagerSetPeerBest p bn) = modifyPeer f p
@@ -377,9 +283,7 @@ processManagerMessage (ManagerSetPeerVersion p v) =
         Nothing -> return ()
         Just op ->
             runExceptT testVersion >>= \case
-                Left ex -> do
-                    banPeer (onlinePeerAddress op)
-                    onlinePeerAsync op `cancelWith` ex
+                Left ex -> onlinePeerAsync op `cancelWith` ex
                 Right () -> do
                     loadFilter
                     askForPeers
@@ -444,11 +348,7 @@ processManagerMessage (PeerStopped (p, _ex)) = do
         m <- findPeerAsync p opb
         when (isJust m) $ removePeer p opb
         return m
-    case m of
-        Just op -> do
-            backoffPeer (onlinePeerAddress op)
-            processPeerOffline op
-        Nothing -> return ()
+    forM_ m processPeerOffline
 
 processPeerOffline :: MonadManager n m => OnlinePeer -> m ()
 processPeerOffline op
@@ -475,8 +375,8 @@ connectNewPeers = do
     mo <- mgrConfMaxPeers <$> asks myConfig
     os <- getOnlinePeers
     when (null os) $ do
-        ps' <- resolvePeers
-        mapM_ (uncurry storePeer) ps'
+        ps' <- initialPeers
+        mapM_ storePeer ps'
     os' <- getOnlinePeers
     when (length os' < mo) $
         getNewPeer >>= \case
@@ -557,7 +457,6 @@ setFilter bl = do
                 $(logErrorS) "Manager" $
                     "Peer " <> cs (show (onlinePeerAddress op)) <>
                     "does not support bloom filters"
-                banPeer (onlinePeerAddress op)
                 onlinePeerAsync op `cancelWith` BloomFiltersNotSupported
 
 findPeer :: MonadManager n m => Peer -> m (Maybe OnlinePeer)

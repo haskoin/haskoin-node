@@ -111,12 +111,10 @@ main = do
                     b2 `shouldSatisfy` testMerkleRoot net
         it "connects to multiple peers" $
             withTestNode net "connect-peers" $ \TestNode {..} -> do
-                replicateM_ 3 $ do
-                    pc <- receive testEvents
-                    case pc of
-                        ManagerEvent (ManagerDisconnect _) ->
-                            expectationFailure "Received peer disconnection"
-                        _ -> return ()
+                replicateM_ 2 $
+                    receiveMatch testEvents $ \case
+                        ManagerEvent (ManagerConnect _) -> Just ()
+                        _ -> Nothing
                 ps <- managerGetPeers testMgr
                 length ps `shouldSatisfy` (>= 2)
         it "connects and syncs some headers" $
