@@ -39,10 +39,6 @@ main = do
                     fromMaybe (error "No version") <$>
                     managerGetPeerVersion p testMgr
                 v `shouldSatisfy` (>= 70002)
-                bb <-
-                    fromMaybe (error "No best block") <$>
-                    managerGetPeerBest p testMgr
-                bb `shouldBe` genesisNode net
         it "downloads some blocks" $
             withTestNode net "get-blocks" $ \TestNode {..} -> do
                 let hs = [h1, h2]
