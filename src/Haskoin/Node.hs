@@ -74,6 +74,6 @@ withNode cfg f = do
             , mgrConfManager = m
             , mgrConfChain = c
             , mgrConfNetwork = nodeNet cfg
-            , mgrConfConnectInterval = nodeConfConnectInterval cfg
-            , mgrConfStale = nodeConfStale cfg
+            , mgrConfConnectInterval = nodeConnectInterval cfg
+            , mgrConfStale = nodeStale cfg
             }

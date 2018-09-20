@@ -69,23 +69,23 @@ type Manager = Inbox ManagerMessage
 -- created before launching the node. The node will start those processes and
 -- receive any messages sent to those mailboxes.
 data NodeConfig = NodeConfig
-    { maxPeers                :: !Int
+    { maxPeers            :: !Int
       -- ^ maximum number of connected peers allowed
-    , database                :: !DB
+    , database            :: !DB
       -- ^ RocksDB database handler
-    , initPeers               :: ![HostPort]
+    , initPeers           :: ![HostPort]
       -- ^ static list of peers to connect to
-    , discover                :: !Bool
+    , discover            :: !Bool
       -- ^ activate peer discovery
-    , nodeEvents              :: !(Listen NodeEvent)
+    , nodeEvents          :: !(Listen NodeEvent)
       -- ^ listener for events originated by the node
-    , netAddress              :: !NetworkAddress
+    , netAddress          :: !NetworkAddress
       -- ^ network address for the local host
-    , nodeNet                 :: !Network
+    , nodeNet             :: !Network
       -- ^ network constants
-    , nodeConfConnectInterval :: !Int
+    , nodeConnectInterval :: !Int
       -- ^ how often should the manager try to connect to peers (roughly)
-    , nodeConfStale           :: !Word32
+    , nodeStale           :: !Word32
       -- ^ how long to wait for a peer to respond to requests (seconds)
     }
 

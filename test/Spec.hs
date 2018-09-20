@@ -207,8 +207,8 @@ withTestNode net t f =
                     , nodeEvents = (`sendSTM` events)
                     , netAddress = NetworkAddress 0 (SockAddrInet 0 0)
                     , nodeNet = net
-                    , nodeConfConnectInterval = 50 * 1000 -- 50 milliseconds
-                    , nodeConfStale = 3
+                    , nodeConnectInterval = 50 * 1000 -- 50 milliseconds
+                    , nodeStale = 3
                     }
         withNode cfg $ \(mgr, ch) ->
             lift $
