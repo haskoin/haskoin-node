@@ -3,29 +3,26 @@
 {-# LANGUAGE LambdaCase            #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings     #-}
+{-# LANGUAGE RecordWildCards       #-}
 {-# LANGUAGE TemplateHaskell       #-}
 {-# LANGUAGE TupleSections         #-}
 {-# LANGUAGE TypeFamilies          #-}
-{-# LANGUAGE RecordWildCards       #-}
 module Network.Haskoin.Node.Peer
     ( peer
     ) where
 
+import           Conduit
 import           Control.Monad
 import           Control.Monad.Logger
 import           Control.Monad.Reader
 import           Data.Bits
 import           Data.ByteString             (ByteString)
-import qualified Data.ByteString             as BS
-import qualified Data.ByteString.Char8       as C8
-import qualified Data.ByteString.Lazy        as BL
-import           Data.Conduit
-import qualified Data.Conduit.Binary         as CB
-import           Data.Conduit.Network
+import qualified Data.ByteString             as B
 import           Data.Maybe
 import           Data.Serialize
 import           Data.String
 import           Data.String.Conversions
+import           Data.Text                   (Text)
 import           Data.Time.Clock
 import           Data.Word
 import           Network.Haskoin.Block
@@ -33,11 +30,9 @@ import           Network.Haskoin.Constants
 import           Network.Haskoin.Network
 import           Network.Haskoin.Node.Common
 import           Network.Haskoin.Transaction
-import           Network.Socket              (SockAddr)
 import           NQE
 import           System.Random
 import           UnliftIO
-import           Data.Text                   (Text)
 
 type MonadPeer m = (MonadUnliftIO m, MonadLoggerIO m, MonadReader PeerReader m)
 
@@ -165,11 +160,12 @@ checkStale :: MonadPeer m => ConduitM () Message m ()
 checkStale = do
     pbox <- asks myPending
     ps <- readTVarIO pbox
+    stale <- peerConfStale <$> asks myConfig
     case ps of
         [] -> return ()
         (_, ts):_ -> do
             cur <- computeTime
-            when (cur > ts + 30) $ throwIO PeerTimeout
+            when (cur > ts + stale) $ throwIO PeerTimeout
 
 registerOutgoing :: MonadPeer m => Message -> m ()
 registerOutgoing (MGetData (GetData ivs)) = do
@@ -272,8 +268,8 @@ incoming m = do
                     Reject
                     { rejectMessage = MCVersion
                     , rejectCode = RejectDuplicate
-                    , rejectReason = VarString BS.empty
-                    , rejectData = BS.empty
+                    , rejectReason = VarString B.empty
+                    , rejectData = B.empty
                     }
         MPing (Ping n) -> yield $ MPong (Pong n)
         MPong (Pong n) -> atomically (l (p, GotPong n))
@@ -316,18 +312,22 @@ incoming m = do
         MGetAddr -> managerGetAddr p mgr
         _ -> $(logWarnS) lp $ "Ignoring message: " <> logMsg m
 
-inPeerConduit :: MonadIO m => Network -> ConduitT ByteString PeerMessage m ()
+inPeerConduit ::
+       MonadIO m
+    => Network
+    -> ConduitT ByteString PeerMessage m ()
 inPeerConduit net = do
-    headerBytes <- CB.take 24
-    case decodeLazy headerBytes of
+    x <- takeCE 24 .| foldC
+    case decode x of
         Left e -> throwIO $ DecodeMessageError e
         Right (MessageHeader _ _cmd len _) -> do
             when (len > 32 * 2 ^ (20 :: Int)) . throwIO $ PayloadTooLarge len
-            payloadBytes <- CB.take (fromIntegral len)
-            case runGetLazy (getMessage net) $ headerBytes `BL.append` payloadBytes of
-                Left e    -> throwIO $ CannotDecodePayload e
-                Right msg -> yield $ PeerIncoming msg
-            inPeerConduit net
+            y <- takeCE (fromIntegral len) .| foldC
+            case runGet (getMessage net) $ x `B.append` y of
+                Left e -> throwIO $ CannotDecodePayload e
+                Right msg -> do
+                    yield $ PeerIncoming msg
+                    inPeerConduit net
 
 outPeerConduit :: Monad m => Network -> ConduitT Message ByteString m ()
 outPeerConduit net = awaitForever $ yield . runPut . putMessage net

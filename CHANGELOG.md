@@ -11,10 +11,12 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 - Add `data-default` dependency.
 - Refactor peer to make it easier to test in the future.
 - Connect to one peer at a time.
+- Allow configurable timeouts for manager and peer.
 
 ### Removed
 - Remove irrelevant fields from peer information.
 - Remove peer block head tracking.
+- Remove dependency on binary conduits.
 
 ## 0.6.1
 ### Changed

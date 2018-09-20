@@ -101,7 +101,7 @@ manager cfg = do
         opb <- newTVarIO []
         bfb <- newTVarIO Nothing
         bbb <- newTVarIO bb
-        withConnectLoop (mgrConfManager cfg) $ do
+        withConnectLoop cfg $ do
             let rd =
                     ManagerReader
                         { mySelf = mgrConfManager cfg
@@ -219,14 +219,18 @@ getNewPeer = do
 getConnectedPeers :: MonadManager n m => m [OnlinePeer]
 getConnectedPeers = filter onlinePeerConnected <$> getOnlinePeers
 
-withConnectLoop :: (MonadUnliftIO m, MonadLoggerIO m) => Manager -> m a -> m a
-withConnectLoop mgr f = withAsync go $ const f
+withConnectLoop ::
+       (MonadUnliftIO m, MonadLoggerIO m) => ManagerConfig -> m a -> m a
+withConnectLoop conf f = withAsync go $ const f
   where
     go =
         forever $ do
-            ManagerPing `send` mgr
-            i <- liftIO (randomRIO (100000, 900000))
-            threadDelay i
+            ManagerPing `send` mgrConfManager conf
+            threadDelay =<<
+                liftIO
+                    (randomRIO
+                         ( mgrConfConnectInterval conf `div` 4 * 3
+                         , mgrConfConnectInterval conf `div` 4 * 5))
 
 managerLoop :: (MonadUnliftIO m, MonadManager n m) => m ()
 managerLoop = do
@@ -368,13 +372,12 @@ connectNewPeers = do
     os <- getOnlinePeers
     when (length os < mo) $
         getNewPeer >>= \case
-            Nothing -> do
-                $(logInfoS) "Manager" "Populating empty peer list..."
-                initialPeers >>= mapM_ storePeer
+            Nothing -> initialPeers >>= mapM_ storePeer
             Just sa -> conn sa
   where
     conn sa = do
         ad <- mgrConfNetAddr <$> asks myConfig
+        stale <- mgrConfStale <$> asks myConfig
         mgr <- asks mySelf
         ch <- asks myChain
         pl <- mgrConfPeerListener <$> asks myConfig
@@ -393,6 +396,7 @@ connectNewPeers = do
                     , peerConfName = cs $ show sa
                     , peerConfConnect = withConnection sa
                     , peerConfVersion = ver
+                    , peerConfStale = stale
                     }
         psup <- asks myPeerSupervisor
         pmbox <- newTBQueueIO 100

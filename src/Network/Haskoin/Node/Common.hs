@@ -1,10 +1,14 @@
-{-# LANGUAGE FlexibleContexts          #-}
-{-# LANGUAGE LambdaCase                #-}
-{-# LANGUAGE MultiParamTypeClasses     #-}
-{-# LANGUAGE RankNTypes                #-}
+{-# LANGUAGE FlexibleContexts      #-}
+{-# LANGUAGE LambdaCase            #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE RankNTypes            #-}
 module Network.Haskoin.Node.Common where
 
+import           Conduit
 import           Data.ByteString             (ByteString)
+import           Data.Conduit.Network
+import           Data.String.Conversions
+import           Data.Text                   (Text)
 import           Data.Time.Clock
 import           Data.Time.Clock.POSIX
 import           Data.Word
@@ -21,10 +25,6 @@ import           Network.Socket              (AddrInfo (..), AddrInfoFlag (..),
 import           NQE
 import           Text.Read
 import           UnliftIO
-import           Conduit
-import           Data.Conduit.Network
-import           Data.String.Conversions
-import           Data.Text                   (Text)
 
 type HostPort = (Host, Port)
 type Host = String
@@ -69,45 +69,53 @@ type Manager = Inbox ManagerMessage
 -- created before launching the node. The node will start those processes and
 -- receive any messages sent to those mailboxes.
 data NodeConfig = NodeConfig
-    { maxPeers       :: !Int
+    { maxPeers                :: !Int
       -- ^ maximum number of connected peers allowed
-    , database       :: !DB
+    , database                :: !DB
       -- ^ RocksDB database handler
-    , initPeers      :: ![HostPort]
+    , initPeers               :: ![HostPort]
       -- ^ static list of peers to connect to
-    , discover       :: !Bool
+    , discover                :: !Bool
       -- ^ activate peer discovery
-    , nodeEvents     :: !(Listen NodeEvent)
+    , nodeEvents              :: !(Listen NodeEvent)
       -- ^ listener for events originated by the node
-    , netAddress     :: !NetworkAddress
+    , netAddress              :: !NetworkAddress
       -- ^ network address for the local host
-    , nodeNet        :: !Network
+    , nodeNet                 :: !Network
       -- ^ network constants
+    , nodeConfConnectInterval :: !Int
+      -- ^ how often should the manager try to connect to peers (roughly)
+    , nodeConfStale           :: !Word32
+      -- ^ how long to wait for a peer to respond to requests (seconds)
     }
 
 -- | Peer manager configuration. Mailbox must be created before starting the
 -- process.
 data ManagerConfig = ManagerConfig
-    { mgrConfMaxPeers       :: !Int
+    { mgrConfMaxPeers        :: !Int
       -- ^ maximum number of peers to connect to
-    , mgrConfDB             :: !DB
+    , mgrConfDB              :: !DB
       -- ^ RocksDB database handler to store peer information
-    , mgrConfPeers          :: ![HostPort]
+    , mgrConfPeers           :: ![HostPort]
       -- ^ static list of peers to connect to
-    , mgrConfDiscover       :: !Bool
+    , mgrConfDiscover        :: !Bool
       -- ^ activate peer discovery
-    , mgrConfMgrListener    :: !(Listen ManagerEvent)
+    , mgrConfMgrListener     :: !(Listen ManagerEvent)
       -- ^ listener for events originating from peer manager
-    , mgrConfPeerListener   :: !(Listen (Peer, PeerEvent))
+    , mgrConfPeerListener    :: !(Listen (Peer, PeerEvent))
       -- ^ listener for events originating from individual peers
-    , mgrConfNetAddr        :: !NetworkAddress
+    , mgrConfNetAddr         :: !NetworkAddress
       -- ^ network address for the local host
-    , mgrConfManager        :: !Manager
+    , mgrConfManager         :: !Manager
       -- ^ peer manager mailbox
-    , mgrConfChain          :: !Chain
+    , mgrConfChain           :: !Chain
       -- ^ chain process mailbox
-    , mgrConfNetwork        :: !Network
+    , mgrConfNetwork         :: !Network
       -- ^ network constants
+    , mgrConfConnectInterval :: !Int
+      -- ^ approximately how often to try to connect to peers in microseconds
+    , mgrConfStale           :: !Word32
+      -- ^ how long to wait for a peer to respond to requests (seconds)
     }
 
 -- | Event originating from the node. Aggregates events from the peer manager,
@@ -220,12 +228,14 @@ data PeerConfig = PeerConfig
       -- ^ listener for peer events
     , peerConfNetwork  :: !Network
       -- ^ network constants
-    , peerConfName     :: !Text 
+    , peerConfName     :: !Text
       -- ^ peer name
-    , peerConfConnect  :: !((NetConduits IO -> IO ()) -> IO ()) 
+    , peerConfConnect  :: !((NetConduits IO -> IO ()) -> IO ())
       -- ^ peer connection
-    , peerConfVersion  :: !Version 
+    , peerConfVersion  :: !Version
       -- ^ peer version
+    , peerConfStale    :: !Word32
+      -- ^ how long to wait for a peer to respond to requests (seconds)
     }
 
 -- | Reasons why a peer may stop working.
@@ -288,9 +298,9 @@ data PeerMessage
     = PeerOutgoing !Message
     | PeerIncoming !Message
 
-data NetConduits m = NetConduits 
+data NetConduits m = NetConduits
   { getNetSource :: ConduitT () ByteString m ()
-  , getNetSink :: ConduitT ByteString Void m ()
+  , getNetSink   :: ConduitT ByteString Void m ()
   }
 
 -- | Convert a host and port into a list of matching 'SockAddr'.
@@ -488,6 +498,6 @@ withConnection na f =
             throwIO PeerAddressInvalid
         Just (host, port) ->
             let cset = clientSettings port (cs host)
-            in runGeneralTCPClient cset $ \ad -> 
+            in runGeneralTCPClient cset $ \ad ->
               let nc = NetConduits (appSource ad) (appSink ad)
               in f nc
