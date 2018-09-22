@@ -35,6 +35,7 @@ import           Control.Monad.Logger
 import           Network.Haskoin.Node.Chain
 import           Network.Haskoin.Node.Common
 import           Network.Haskoin.Node.Manager
+import           Network.Haskoin.Node.Peer
 import           NQE
 import           UnliftIO
 
@@ -49,7 +50,7 @@ withNode cfg f = do
     c <- newInbox =<< newTQueueIO
     m <- newInbox =<< newTQueueIO
     withAsync (chain (chain_conf c m)) $ \ch ->
-        withAsync (manager (manager_conf c m)) $ \mgr -> do
+        withAsync (manager (manager_conf c m) peer) $ \mgr -> do
             link ch
             link mgr
             f (m, c)

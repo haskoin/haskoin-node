@@ -27,8 +27,6 @@ dependencies:
   - unliftio
 library:
   source-dirs: src
-  exposed-modules:
-    - Haskoin.Node
   dependencies:
     - conduit
     - conduit-extra

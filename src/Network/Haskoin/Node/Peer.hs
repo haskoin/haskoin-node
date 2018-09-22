@@ -60,19 +60,20 @@ logPeer ::
        (ConvertibleStrings Text a, Semigroup a, IsString a) => Text -> a
 logPeer sa = "Peer<" <> cs sa <> ">"
 
-peer :: (MonadUnliftIO m, MonadLoggerIO m) => PeerConfig -> Peer -> m ()
-peer pc@PeerConfig {..} p = withRunInIO $ \io ->
-    peerConfConnect $ \nc ->
-        io $ do
-            pbox <- newTVarIO []
-            let rd =
-                    PeerReader
-                        { myConfig = pc
-                        , mySelf = p
-                        , myPeerName = peerConfName
-                        , myPending = pbox
-                        }
-            runReaderT (peerSession nc) rd
+peer :: (MonadUnliftIO m, MonadLoggerIO m) => PeerConfig -> m ()
+peer pc@PeerConfig {..} =
+    withRunInIO $ \io ->
+        peerConfConnect $ \nc ->
+            io $ do
+                pbox <- newTVarIO []
+                let rd =
+                        PeerReader
+                            { myConfig = pc
+                            , mySelf = peerConfMailbox
+                            , myPeerName = peerConfName
+                            , myPending = pbox
+                            }
+                runReaderT (peerSession nc) rd
   where
     go = handshake >> exchangePing >> peerLoop
     net = peerConfNetwork
@@ -81,7 +82,7 @@ peer pc@PeerConfig {..} p = withRunInIO $ \io ->
             ons = transPipe liftIO (getNetSink nc)
             src =
                 runConduit $
-                ins .| inPeerConduit net .| conduitMailbox p
+                ins .| inPeerConduit net .| conduitMailbox peerConfMailbox
             snk = outPeerConduit net .| ons
         withAsync src $ \as -> do
             link as

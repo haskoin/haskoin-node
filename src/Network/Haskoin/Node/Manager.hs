@@ -33,7 +33,6 @@ import           Network.Haskoin.Block
 import           Network.Haskoin.Constants
 import           Network.Haskoin.Network
 import           Network.Haskoin.Node.Common
-import           Network.Haskoin.Node.Peer
 import           Network.Socket              (SockAddr (..))
 import           NQE
 import           System.Random
@@ -57,6 +56,7 @@ data ManagerReader m = ManagerReader
     , onlinePeers      :: !(TVar [OnlinePeer])
     , myBloomFilter    :: !(TVar (Maybe BloomFilter))
     , myBestBlock      :: !(TVar BlockNode)
+    , myPeerConnect    :: !(PeerConfig -> m ())
     }
 
 data PeerAddress
@@ -92,8 +92,12 @@ instance Serialize PeerAddressData where
         S.putWord8 0x80
         S.put (maxBound - getPeerLastConnect)
 
-manager :: (MonadUnliftIO m, MonadLoggerIO m) => ManagerConfig -> m ()
-manager cfg = do
+manager ::
+       (MonadUnliftIO m, MonadLoggerIO m)
+    => ManagerConfig
+    -> (PeerConfig -> m ())
+    -> m ()
+manager cfg pconn = do
     psup <- newInbox =<< newTQueueIO
     withAsync (supervisor (Notify dead) psup []) $ \sup -> do
         link sup
@@ -112,6 +116,7 @@ manager cfg = do
                         , onlinePeers = opb
                         , myBloomFilter = bfb
                         , myBestBlock = bbb
+                        , myPeerConnect = pconn
                         }
             run `runReaderT` rd
   where
@@ -387,6 +392,8 @@ connectNewPeers = do
         bb <- chainGetBest ch
         let rmt = NetworkAddress (srv net) sa
         ver <- buildVersion net nonce (nodeHeight bb) ad rmt
+        pmbox <- newTBQueueIO 100
+        p <- newInbox pmbox
         let pc =
                 PeerConfig
                     { peerConfManager = mgr
@@ -397,11 +404,11 @@ connectNewPeers = do
                     , peerConfConnect = withConnection sa
                     , peerConfVersion = ver
                     , peerConfStale = stale
+                    , peerConfMailbox = p
                     }
         psup <- asks myPeerSupervisor
-        pmbox <- newTBQueueIO 100
-        p <- newInbox pmbox
-        a <- psup `addChild` peer pc p
+        pconn <- asks myPeerConnect
+        a <- psup `addChild` pconn pc
         newPeerConnection sa nonce p a
     srv net
         | getSegWit net = 8

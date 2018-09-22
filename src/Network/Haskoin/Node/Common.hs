@@ -115,7 +115,6 @@ data ManagerConfig = ManagerConfig
     , mgrConfConnectInterval :: !Int
       -- ^ approximately how often to try to connect to peers in microseconds
     , mgrConfStale           :: !Word32
-      -- ^ how long to wait for a peer to respond to requests in microseconds
     }
 
 -- | Event originating from the node. Aggregates events from the peer manager,
@@ -236,6 +235,8 @@ data PeerConfig = PeerConfig
       -- ^ peer version
     , peerConfStale    :: !Word32
       -- ^ how long to wait for a peer to respond to requests in microseconds
+    , peerConfMailbox  :: !Peer
+      -- ^ mailbox for this peer
     }
 
 -- | Reasons why a peer may stop working.
