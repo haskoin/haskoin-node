@@ -220,7 +220,7 @@ logPeersConnected = do
 backOffPeer :: MonadManager n m => SockAddr -> m ()
 backOffPeer sa = do
     db <- asks myPeerDB
-    ops <- readTVarIO =<< asks onlinePeers
+    ops <- filter onlinePeerConnected <$> (readTVarIO =<< asks onlinePeers)
     unless (null ops) $ do
         let k = PeerAddress True sa
         now <- computeTime
