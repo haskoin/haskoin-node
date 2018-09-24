@@ -20,7 +20,6 @@ import           Control.Monad.Trans.Maybe
 import           Data.Bits
 import qualified Data.ByteString             as BS
 import           Data.Default
-import           Data.Either
 import           Data.Function
 import           Data.List
 import           Data.Maybe
@@ -413,17 +412,17 @@ processManagerMessage (ManagerGetOnlinePeer p reply) =
 processManagerMessage (ManagerPeerPing p i) =
     modifyPeer (\x -> x {onlinePeerPings = take 11 $ i : onlinePeerPings x}) p
 
-processManagerMessage (PeerStopped (p, ex)) = do
+processManagerMessage (PeerStopped (p, _)) = do
     opb <- asks onlinePeers
     m <- atomically $ do
         m <- findPeerAsync p opb
         when (isJust m) $ removePeer p opb
         return m
-    mapM_ (processPeerOffline ex) m
+    mapM_ processPeerOffline m
 
 processPeerOffline ::
-       MonadManager n m => Either SomeException () -> OnlinePeer -> m ()
-processPeerOffline ex op
+       MonadManager n m => OnlinePeer -> m ()
+processPeerOffline op
     | onlinePeerConnected op = do
         let p = onlinePeerMailbox op
         $(logWarnS) "Manager" $
@@ -432,10 +431,12 @@ processPeerOffline ex op
         l <- mgrConfMgrListener <$> asks myConfig
         atomically (l (ManagerDisconnect p))
         logPeersConnected
-        when (isLeft ex) $ backOffPeer (onlinePeerAddress op)
-    | otherwise =
+        backOffPeer (onlinePeerAddress op)
+    | otherwise = do
         $(logWarnS) "Manager" $
-        "Could not connect to peer " <> cs (show (onlinePeerAddress op))
+            "Could not connect to peer " <> cs (show (onlinePeerAddress op))
+        logPeersConnected
+        backOffPeer (onlinePeerAddress op)
 
 getPeers :: MonadManager n m => m [OnlinePeer]
 getPeers = sortBy (compare `on` median . onlinePeerPings) <$> getConnectedPeers
