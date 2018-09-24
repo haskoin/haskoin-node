@@ -220,27 +220,30 @@ logPeersConnected = do
 backOffPeer :: MonadManager n m => SockAddr -> m ()
 backOffPeer sa = do
     db <- asks myPeerDB
-    ops <- filter onlinePeerConnected <$> (readTVarIO =<< asks onlinePeers)
-    unless (null ops) $ do
-        let k = PeerAddress True sa
-        now <- computeTime
-        getPeer sa >>= \case
-            Nothing -> do
-                let v =
-                        PeerAddressData
-                            { getPeerFailCount = 1
-                            , getPeerLastConnect = 0
-                            , getPeerLastFail = now
-                            }
-                R.insert db k v
-            Just v -> do
-                let v' =
-                        v
-                            { getPeerFailCount = getPeerFailCount v + 1
-                            , getPeerLastFail = now
-                            }
-                R.remove db k {getPeerPunished = False}
-                R.insert db k v'
+    offline <-
+        not . any onlinePeerConnected <$> (readTVarIO =<< asks onlinePeers)
+    let k = PeerAddress True sa
+    now <- computeTime
+    getPeer sa >>= \case
+        Nothing -> do
+            let v =
+                    PeerAddressData
+                        { getPeerFailCount = 1
+                        , getPeerLastConnect = 0
+                        , getPeerLastFail = now
+                        }
+            R.insert db k v
+        Just v -> do
+            let v' =
+                    v
+                        { getPeerFailCount =
+                              if offline
+                                  then getPeerFailCount v
+                                  else getPeerFailCount v + 1
+                        , getPeerLastFail = now
+                        }
+            R.remove db k {getPeerPunished = False}
+            R.insert db k v'
 
 storePeer :: MonadManager n m => Bool -> SockAddr -> m ()
 storePeer override sa =
