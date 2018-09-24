@@ -208,6 +208,8 @@ data ChainMessage
       -- ^ peer asks for our block headers in the future
     | ChainIsSynced !(Reply Bool)
       -- ^ is chain in sync with network?
+    | ChainPing
+      -- ^ internal for housekeeping within the chain process
 
 -- | Events originating from chain process.
 data ChainEvent

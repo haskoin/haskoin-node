@@ -30,7 +30,9 @@ import           Network.Haskoin.Block
 import           Network.Haskoin.Network
 import           Network.Haskoin.Node.Common
 import           NQE
+import           System.Random
 import           UnliftIO
+import           UnliftIO.Concurrent
 
 type MonadChain m
      = ( BlockHeaders m
@@ -114,7 +116,7 @@ chain cfg = do
         when (isNothing m) $ do
             addBlockHeader (genesisNode net)
             insert db BestBlockKey (genesisNode net)
-        forever $ do
+        forever $ withSyncLoop (chainConfChain cfg) $ do
             msg <- receive $ chainConfChain cfg
             processChainMessage msg
 
@@ -223,6 +225,16 @@ processChainMessage (ChainIsSynced reply) = do
     s <- mySynced <$> readTVarIO st
     atomically (reply s)
 
+processChainMessage ChainPing = do
+    stb <- asks chainState
+    st <- readTVarIO stb
+    when (isNothing (syncingPeer st) && null (newPeers st)) $ do
+        ps <-
+            fmap (map onlinePeerMailbox) $
+            chainConfManager <$> asks myConfig >>= managerGetPeers
+        atomically . modifyTVar stb $ \s -> s {newPeers = ps}
+        processSyncQueue
+
 processSyncQueue :: MonadChain m => m ()
 processSyncQueue = do
     s <- asks chainState >>= readTVarIO
@@ -263,3 +275,12 @@ peerString p = do
     managerGetPeer mgr p >>= \case
         Nothing -> return "[unknown]"
         Just o -> return $ fromString $ show (onlinePeerAddress o)
+
+withSyncLoop :: (MonadUnliftIO m, MonadLoggerIO m) => Chain -> m a -> m a
+withSyncLoop ch f = withAsync go $ \a -> link a >> f
+  where
+    go =
+        forever $ do
+            threadDelay =<<
+                liftIO (randomRIO (40 * 1000 * 1000, 60 * 1000 * 1000))
+            ChainPing `send` ch

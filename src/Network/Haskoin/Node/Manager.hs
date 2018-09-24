@@ -226,7 +226,7 @@ getConnectedPeers = filter onlinePeerConnected <$> getOnlinePeers
 
 withConnectLoop ::
        (MonadUnliftIO m, MonadLoggerIO m) => ManagerConfig -> m a -> m a
-withConnectLoop conf f = withAsync go $ const f
+withConnectLoop conf f = withAsync go $ \a -> link a >> f
   where
     go =
         forever $ do
