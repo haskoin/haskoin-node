@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 - Remove irrelevant fields from peer information.
 - Remove peer block head tracking.
 - Remove dependency on binary conduits.
+- Simplify peer selection and management.
 
 ## 0.6.1
 ### Changed

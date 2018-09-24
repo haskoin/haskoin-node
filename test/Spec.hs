@@ -189,7 +189,8 @@ withTestNode ::
     -> (TestNode -> m ())
     -> m ()
 withTestNode net t f =
-    runNoLoggingT . withSystemTempDirectory ("haskoin-node-test-" <> t <> "-") $ \w -> do
+    runNoLoggingT $
+    withSystemTempDirectory ("haskoin-node-test-" <> t <> "-") $ \w -> do
         events <- newInbox =<< newTQueueIO
         db <-
             RocksDB.open

@@ -36,6 +36,7 @@ library:
     - resourcet
     - rocksdb-query
     - string-conversions
+    - transformers
 tests:
   haskoin-node-test:
     main: Spec.hs
