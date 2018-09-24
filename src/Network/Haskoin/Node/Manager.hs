@@ -21,6 +21,7 @@ import           Data.Bits
 import qualified Data.ByteString             as BS
 import           Data.Default
 import           Data.Function
+import           Data.Hashable
 import           Data.List
 import           Data.Maybe
 import           Data.Serialize              (Get, Put, Serialize, get, put)
@@ -62,6 +63,7 @@ data ManagerReader m = ManagerReader
 
 data PeerAddress
     = PeerAddress { getPeerPunished :: !Bool
+                  , getPeerHash     :: !Int -- ^ randomize peer sort order a bit
                   , getPeerAddress  :: !SockAddr }
     | PeerAddressBase
     deriving (Eq, Ord, Show)
@@ -70,11 +72,13 @@ instance Serialize PeerAddress where
     get = do
         guard . (== 0x81) =<< S.getWord8
         getPeerPunished <- get
+        getPeerHash <- get
         getPeerAddress <- decodeSockAddr
         return PeerAddress {..}
     put PeerAddress {..} = do
         S.putWord8 0x81
         put getPeerPunished
+        put getPeerHash
         encodeSockAddr getPeerAddress
     put PeerAddressBase = S.putWord8 0x81
 
@@ -185,7 +189,7 @@ decodeSockAddr = do
 connectPeer :: MonadManager n m => SockAddr -> m ()
 connectPeer sa = do
     db <- asks myPeerDB
-    let k = PeerAddress False sa
+    let k = PeerAddress False (hash (show sa)) sa
     getPeer sa >>= \case
         Nothing -> throwString "Could not find peer to mark connected"
         Just v -> do
@@ -205,8 +209,8 @@ getPeer :: MonadManager n m => SockAddr -> m (Maybe PeerAddressData)
 getPeer sa =
     asks myPeerDB >>= \db ->
         runMaybeT $
-        MaybeT (retrieve db def (PeerAddress False sa)) <|>
-        MaybeT (retrieve db def (PeerAddress True sa))
+        MaybeT (retrieve db def (PeerAddress False (hash (show sa)) sa)) <|>
+        MaybeT (retrieve db def (PeerAddress True (hash (show sa)) sa))
 
 
 logPeersConnected :: MonadManager n m => m ()
@@ -221,7 +225,7 @@ backOffPeer sa = do
     db <- asks myPeerDB
     offline <-
         not . any onlinePeerConnected <$> (readTVarIO =<< asks onlinePeers)
-    let k = PeerAddress True sa
+    let k = PeerAddress True (hash (show sa)) sa
     now <- computeTime
     getPeer sa >>= \case
         Nothing -> do
@@ -254,7 +258,7 @@ storePeer override sa =
   where
     new_entry = do
         db <- asks myPeerDB
-        let k = PeerAddress False sa
+        let k = PeerAddress False (hash (show sa)) sa
         let v =
                 PeerAddressData
                     { getPeerFailCount = 0
@@ -288,7 +292,7 @@ getNewPeer = do
          in is_not_connected && post_back_off
     f _ _ _ = undefined
     g (PeerAddress {..}, PeerAddressData {}) = getPeerAddress
-    g _ = undefined
+    g _                                      = undefined
 
 getConnectedPeers :: MonadManager n m => m [OnlinePeer]
 getConnectedPeers = filter onlinePeerConnected <$> getOnlinePeers
