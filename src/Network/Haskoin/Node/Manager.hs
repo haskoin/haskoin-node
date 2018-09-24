@@ -191,7 +191,9 @@ connectPeer sa = do
     db <- asks myPeerDB
     let k = PeerAddress False (hash (show sa)) sa
     getPeer sa >>= \case
-        Nothing -> throwString "Could not find peer to mark connected"
+        Nothing ->
+            $(logErrorS) "Manager" $
+                "Could not find peer to mark connected: " <> cs (show sa)
         Just v -> do
             now <- computeTime
             R.remove db k {getPeerPunished = True}
@@ -229,6 +231,8 @@ backOffPeer sa = do
     now <- computeTime
     getPeer sa >>= \case
         Nothing -> do
+            $(logErrorS) "Manager" $
+                "Could not find peer to back off: " <> cs (show sa)
             let v =
                     PeerAddressData
                         { getPeerFailCount = 1
