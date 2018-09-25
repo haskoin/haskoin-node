@@ -305,14 +305,11 @@ withConnectLoop ::
        (MonadUnliftIO m, MonadLoggerIO m) => ManagerConfig -> m a -> m a
 withConnectLoop conf f = withAsync go $ \a -> link a >> f
   where
-    go =
+    go = do
+        let i = mgrConfConnectInterval conf * 1000 * 1000 `div` 4
         forever $ do
             ManagerPing `send` mgrConfManager conf
-            threadDelay =<<
-                liftIO
-                    (randomRIO
-                         ( mgrConfConnectInterval conf `div` 4 * 3
-                         , mgrConfConnectInterval conf `div` 4 * 5))
+            threadDelay =<< liftIO (randomRIO (i * 3, i * 5))
 
 managerLoop :: (MonadUnliftIO m, MonadManager n m) => m ()
 managerLoop = do
@@ -458,7 +455,10 @@ connectNewPeers = do
     os <- getOnlinePeers
     when (length os < mo) $
         getNewPeer >>= \case
-            Nothing -> initialPeers >>= mapM_ (storePeer True)
+            Nothing -> initialPeers >>= \ps -> do
+                mapM_ (storePeer True) ps
+                i <- liftIO (randomRIO (0, length ps - 1))
+                conn (ps !! i)
             Just sa -> conn sa
   where
     conn sa = do

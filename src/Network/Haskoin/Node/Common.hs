@@ -84,9 +84,9 @@ data NodeConfig = NodeConfig
     , nodeNet             :: !Network
       -- ^ network constants
     , nodeConnectInterval :: !Int
-      -- ^ how often should the manager try to connect to peers (roughly)
+      -- ^ approximately how often to try to connect to peers in seconds
     , nodeStale           :: !Word32
-      -- ^ how long to wait for a peer to respond to requests in microseconds
+      -- ^ how much to wait for results from a peer in seconds
     }
 
 -- | Peer manager configuration. Mailbox must be created before starting the
@@ -113,8 +113,9 @@ data ManagerConfig = ManagerConfig
     , mgrConfNetwork         :: !Network
       -- ^ network constants
     , mgrConfConnectInterval :: !Int
-      -- ^ approximately how often to try to connect to peers in microseconds
+      -- ^ approximately how often to try to connect to peers in seconds
     , mgrConfStale           :: !Word32
+      -- ^ how much to wait for results from a peer in seconds
     }
 
 -- | Event originating from the node. Aggregates events from the peer manager,
@@ -236,7 +237,7 @@ data PeerConfig = PeerConfig
     , peerConfVersion  :: !Version
       -- ^ peer version
     , peerConfStale    :: !Word32
-      -- ^ how long to wait for a peer to respond to requests in microseconds
+      -- ^ how long to wait for a peer to respond to requests in seconds
     , peerConfMailbox  :: !Peer
       -- ^ mailbox for this peer
     }

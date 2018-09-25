@@ -181,13 +181,9 @@ processChainMessage (ChainNewHeaders p hcs) = do
 
 processChainMessage (ChainNewPeer p) = do
     st <- asks chainState
-    sp <-
-        atomically $ do
-            modifyTVar st $ \s -> s {newPeers = nub $ p : newPeers s}
-            syncingPeer <$> readTVar st
-    case sp of
-        Nothing -> processSyncQueue
-        Just _  -> return ()
+    atomically $
+        modifyTVar st $ \s -> s {newPeers = nub $ p : newPeers s}
+    processSyncQueue
 
 -- Getting a new block should trigger an action equivalent to getting a new peer
 processChainMessage (ChainNewBlocks p _) = processChainMessage (ChainNewPeer p)
@@ -233,7 +229,7 @@ processChainMessage ChainPing = do
             fmap (map onlinePeerMailbox) $
             chainConfManager <$> asks myConfig >>= managerGetPeers
         atomically . modifyTVar stb $ \s -> s {newPeers = ps}
-        processSyncQueue
+    processSyncQueue
 
 processSyncQueue :: MonadChain m => m ()
 processSyncQueue = do

@@ -50,9 +50,6 @@ data PeerReader = PeerReader
     , myPending  :: !(TVar [(Pending, Word32)])
     }
 
-time :: Int
-time = 15 * 1000 * 1000
-
 logMsg :: IsString a => Message -> a
 logMsg = fromString . cs . commandToString . msgType
 
@@ -110,25 +107,28 @@ handshake = do
         | getSegWit net = services v `testBit` 3
         | otherwise = True
     remoteVer p = do
+        stale <- peerConfStale <$> asks myConfig
         m <-
-            timeout time . receiveMatch p $ \case
+            timeout (fromIntegral stale * 1000 * 1000) . receiveMatch p $ \case
                 PeerIncoming (MVersion v) -> Just v
                 _ -> Nothing
         case m of
             Just v  -> return v
             Nothing -> throwIO PeerTimeout
     remoteVerAck p = do
+        stale <- peerConfStale <$> asks myConfig
         m <-
-            timeout time . receiveMatch p $ \case
+            timeout (fromIntegral stale * 1000 * 1000) . receiveMatch p $ \case
                 PeerIncoming MVerAck -> Just ()
                 _ -> Nothing
         when (isNothing m) $ throwIO PeerTimeout
 
 peerLoop :: MonadPeer m => ConduitT () Message m ()
-peerLoop =
+peerLoop = do
+    me <- asks mySelf
+    stale <- peerConfStale <$> asks myConfig
     forever $ do
-        me <- asks mySelf
-        m <- lift $ timeout (2 * 60 * 1000 * 1000) (receive me)
+        m <- lift $ timeout (fromIntegral stale * 1000 * 1000) (receive me)
         case m of
             Nothing  -> exchangePing
             Just msg -> processMessage msg
@@ -141,8 +141,9 @@ exchangePing = do
     me <- asks mySelf
     mgr <- peerConfManager <$> asks myConfig
     t1 <- liftIO getCurrentTime
+    stale <- peerConfStale <$> asks myConfig
     m <-
-        lift . timeout time . receiveMatch me $ \case
+        lift . timeout (fromIntegral stale * 1000 * 1000) . receiveMatch me $ \case
             PeerIncoming (MPong (Pong j))
                 | i == j -> Just ()
             _ -> Nothing

@@ -208,7 +208,7 @@ withTestNode net t f =
                     , nodeEvents = (`sendSTM` events)
                     , netAddress = NetworkAddress 0 (SockAddrInet 0 0)
                     , nodeNet = net
-                    , nodeConnectInterval = 50 * 1000 -- 50 milliseconds
+                    , nodeConnectInterval = 4
                     , nodeStale = 3
                     }
         withNode cfg $ \(mgr, ch) ->
