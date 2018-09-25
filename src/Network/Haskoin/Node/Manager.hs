@@ -455,12 +455,20 @@ connectNewPeers = do
     os <- getOnlinePeers
     when (length os < mo) $
         getNewPeer >>= \case
-            Nothing -> initialPeers >>= \ps -> do
-                mapM_ (storePeer True) ps
-                i <- liftIO (randomRIO (0, length ps - 1))
-                conn (ps !! i)
+            Nothing ->
+                initialPeers >>= \ps -> do
+                    mapM_ (storePeer True) ps
+                    select_random ps os >>= \case
+                        Nothing -> return ()
+                        Just sa -> conn sa
             Just sa -> conn sa
   where
+    select_random ps os = do
+        let os' = map onlinePeerAddress os
+            ps' = filter (`notElem` os') ps
+        case ps' of
+            [] -> return Nothing
+            _ -> Just . (ps' !!) <$> liftIO (randomRIO (0, length ps' - 1))
     conn sa = do
         ad <- mgrConfNetAddr <$> asks myConfig
         stale <- mgrConfStale <$> asks myConfig
