@@ -62,7 +62,7 @@ data ManagerReader m = ManagerReader
     }
 
 data PeerAddress
-    = PeerAddress { getPeerPunished :: !Bool
+    = PeerAddress { getPeerDirty :: !Bool
                   , getPeerHash     :: !Int -- ^ randomize peer sort order a bit
                   , getPeerAddress  :: !SockAddr }
     | PeerAddressBase
@@ -71,13 +71,13 @@ data PeerAddress
 instance Serialize PeerAddress where
     get = do
         guard . (== 0x81) =<< S.getWord8
-        getPeerPunished <- get
+        getPeerDirty <- get
         getPeerHash <- get
         getPeerAddress <- decodeSockAddr
         return PeerAddress {..}
     put PeerAddress {..} = do
         S.putWord8 0x81
-        put getPeerPunished
+        put getPeerDirty
         put getPeerHash
         encodeSockAddr getPeerAddress
     put PeerAddressBase = S.putWord8 0x81
@@ -196,7 +196,7 @@ connectPeer sa = do
                 "Could not find peer to mark connected: " <> cs (show sa)
         Just v -> do
             now <- computeTime
-            R.remove db k {getPeerPunished = True}
+            R.remove db k {getPeerDirty = True}
             R.insert
                 db
                 k
@@ -249,7 +249,7 @@ backOffPeer sa = do
                                   else getPeerFailCount v + 1
                         , getPeerLastFail = now
                         }
-            R.remove db k {getPeerPunished = False}
+            R.remove db k {getPeerDirty = False}
             R.insert db k v'
 
 storePeer :: MonadManager n m => Bool -> SockAddr -> m ()
@@ -262,14 +262,14 @@ storePeer override sa =
   where
     new_entry = do
         db <- asks myPeerDB
-        let k = PeerAddress False (hash (show sa)) sa
+        let k = PeerAddress (not override) (hash (show sa)) sa
         let v =
                 PeerAddressData
                     { getPeerFailCount = 0
                     , getPeerLastConnect = 0
                     , getPeerLastFail = 0
                     }
-        R.remove db k {getPeerPunished = True}
+        R.remove db k {getPeerDirty = override}
         R.insert db k v
 
 
