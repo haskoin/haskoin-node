@@ -62,9 +62,9 @@ data ManagerReader m = ManagerReader
     }
 
 data PeerAddress
-    = PeerAddress { getPeerDirty :: !Bool
-                  , getPeerHash     :: !Int -- ^ randomize peer sort order a bit
-                  , getPeerAddress  :: !SockAddr }
+    = PeerAddress { getPeerDirty   :: !Bool
+                  , getPeerHash    :: !Int -- ^ randomize peer sort order a bit
+                  , getPeerAddress :: !SockAddr }
     | PeerAddressBase
     deriving (Eq, Ord, Show)
 
@@ -225,8 +225,6 @@ logPeersConnected = do
 backOffPeer :: MonadManager n m => SockAddr -> m ()
 backOffPeer sa = do
     db <- asks myPeerDB
-    offline <-
-        not . any onlinePeerConnected <$> (readTVarIO =<< asks onlinePeers)
     let k = PeerAddress True (hash (show sa)) sa
     now <- computeTime
     getPeer sa >>= \case
@@ -243,10 +241,7 @@ backOffPeer sa = do
         Just v -> do
             let v' =
                     v
-                        { getPeerFailCount =
-                              if offline
-                                  then getPeerFailCount v
-                                  else getPeerFailCount v + 1
+                        { getPeerFailCount = getPeerFailCount v + 1
                         , getPeerLastFail = now
                         }
             R.remove db k {getPeerDirty = False}
@@ -468,7 +463,7 @@ connectNewPeers = do
             ps' = filter (`notElem` os') ps
         case ps' of
             [] -> return Nothing
-            _ -> Just . (ps' !!) <$> liftIO (randomRIO (0, length ps' - 1))
+            _  -> Just . (ps' !!) <$> liftIO (randomRIO (0, length ps' - 1))
     conn sa = do
         ad <- mgrConfNetAddr <$> asks myConfig
         stale <- mgrConfStale <$> asks myConfig
