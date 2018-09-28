@@ -166,6 +166,7 @@ data ManagerMessage
       -- ^ add a peer roundtrip time for this peer
     | PeerStopped !(Async (), Either SomeException ())
       -- ^ peer corresponding to 'Async' has stopped
+    | PurgePeers
 
 -- | Configuration for the chain process.
 data ChainConfig = ChainConfig
@@ -266,6 +267,8 @@ data PeerException
       -- ^ peer has no segwit support
     | PeerTimeout
       -- ^ request to peer timed out
+    | PurgingPeer
+      -- ^ peers are being purged
     deriving (Eq, Show)
 
 instance Exception PeerException

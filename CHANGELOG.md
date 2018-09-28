@@ -5,6 +5,10 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
 ## 0.7.0
+### Added
+- Versions for chain and peer database.
+- Automatic purging of chain and peer database when version changes.
+
 ### Changed
 - New version of `haskoin-core`.
 - New version of `rocksdb-query`.

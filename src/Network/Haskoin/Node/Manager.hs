@@ -4,6 +4,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings     #-}
 {-# LANGUAGE RecordWildCards       #-}
+{-# LANGUAGE ScopedTypeVariables   #-}
 {-# LANGUAGE TemplateHaskell       #-}
 {-# LANGUAGE TupleSections         #-}
 module Network.Haskoin.Node.Manager
@@ -18,7 +19,7 @@ import           Control.Monad.Logger
 import           Control.Monad.Reader
 import           Control.Monad.Trans.Maybe
 import           Data.Bits
-import qualified Data.ByteString             as BS
+import qualified Data.ByteString             as B
 import           Data.Default
 import           Data.Function
 import           Data.Hashable
@@ -30,6 +31,7 @@ import           Data.String
 import           Data.String.Conversions
 import           Data.Word
 import           Database.RocksDB            (DB)
+import qualified Database.RocksDB            as R
 import           Database.RocksDB.Query      as R
 import           Network.Haskoin.Block
 import           Network.Haskoin.Constants
@@ -41,6 +43,9 @@ import           System.Random
 import           UnliftIO
 import           UnliftIO.Concurrent
 import           UnliftIO.Resource           as U
+
+dataVersion :: Word32
+dataVersion = 1
 
 type MonadManager n m
      = ( MonadUnliftIO n
@@ -67,6 +72,18 @@ data PeerAddress
                   , getPeerAddress :: !SockAddr }
     | PeerAddressBase
     deriving (Eq, Ord, Show)
+
+data PeerDataVersionKey = PeerDataVersionKey
+    deriving (Eq, Ord, Show)
+
+instance Serialize PeerDataVersionKey where
+    get = do
+        guard . (== 0x82) =<< S.getWord8
+        return PeerDataVersionKey
+    put PeerDataVersionKey = S.putWord8 0x82
+
+instance Key PeerDataVersionKey
+instance KeyValue PeerDataVersionKey Word32
 
 instance Serialize PeerAddress where
     get = do
@@ -117,6 +134,10 @@ manager ::
     -> m ()
 manager cfg pconn = do
     psup <- newInbox =<< newTQueueIO
+    let db = mgrConfDB cfg
+    m :: Maybe Word32 <- retrieve db def PeerDataVersionKey
+    when ((< dataVersion) $ fromMaybe 0 m) $ purgeDB db
+    R.insert db PeerDataVersionKey dataVersion
     withAsync (supervisor (Notify dead) psup []) $ \sup -> do
         link sup
         bb <- chainGetBest $ mgrConfChain cfg
@@ -286,12 +307,28 @@ getNewPeer = do
   where
     f now online_peers (PeerAddress {..}, PeerAddressData {..}) =
         let is_not_connected = getPeerAddress `notElem` online_peers
-            back_off = min getPeerFailCount 60 * 60
+            back_off = min getPeerFailCount 60 * 1800
             post_back_off = getPeerLastFail + back_off < now
          in is_not_connected && post_back_off
     f _ _ _ = undefined
     g (PeerAddress {..}, PeerAddressData {}) = getPeerAddress
     g _                                      = undefined
+
+purgeDB :: MonadUnliftIO m => DB -> m ()
+purgeDB db =
+    U.runResourceT . R.withIterator db def $ \it -> do
+        R.iterSeek it $ B.singleton 0x81
+        recurse_delete it
+  where
+    recurse_delete it =
+        R.iterKey it >>= \case
+            Nothing -> return ()
+            Just k
+                | B.head k == 0x81 -> do
+                    R.delete db def k
+                    R.iterNext it
+                    recurse_delete it
+                | otherwise -> return ()
 
 getConnectedPeers :: MonadManager n m => m [OnlinePeer]
 getConnectedPeers = filter onlinePeerConnected <$> getOnlinePeers
@@ -347,6 +384,12 @@ processManagerMessage (ManagerKill e p) =
             $(logErrorS) "Manager" $
                 "Killing peer " <> cs (show (onlinePeerAddress op))
             onlinePeerAsync op `cancelWith` e
+
+processManagerMessage PurgePeers = do
+    ops <- readTVarIO =<< asks onlinePeers
+    forM_ ops $ \op -> onlinePeerAsync op `cancelWith` PurgingPeer
+    asks myPeerDB >>= purgeDB
+    connectNewPeers
 
 processManagerMessage (ManagerSetPeerVersion p v) =
     modifyPeer f p >> findPeer p >>= \case
@@ -513,7 +556,7 @@ newPeerConnection sa nonce p a =
         , onlinePeerVersion = 0
         , onlinePeerServices = 0
         , onlinePeerRemoteNonce = 0
-        , onlinePeerUserAgent = BS.empty
+        , onlinePeerUserAgent = B.empty
         , onlinePeerRelay = False
         , onlinePeerAsync = a
         , onlinePeerMailbox = p

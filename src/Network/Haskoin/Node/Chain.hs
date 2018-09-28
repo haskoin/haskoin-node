@@ -16,15 +16,17 @@ module Network.Haskoin.Node.Chain
 import           Control.Monad
 import           Control.Monad.Logger
 import           Control.Monad.Reader
-import qualified Data.ByteString             as BS
+import qualified Data.ByteString             as B
 import           Data.Default
 import           Data.Either
 import           Data.List                   (delete, nub)
 import           Data.Maybe
-import           Data.Serialize
+import           Data.Serialize              as S
 import           Data.String
 import           Data.String.Conversions
+import           Data.Word
 import           Database.RocksDB            (DB)
+import qualified Database.RocksDB            as R
 import           Database.RocksDB.Query      as R
 import           Network.Haskoin.Block
 import           Network.Haskoin.Network
@@ -33,11 +35,27 @@ import           NQE
 import           System.Random
 import           UnliftIO
 import           UnliftIO.Concurrent
+import           UnliftIO.Resource
+
+dataVersion :: Word32
+dataVersion = 1
 
 type MonadChain m
      = ( BlockHeaders m
        , MonadLoggerIO m
        , MonadReader ChainReader m)
+
+data ChainDataVersionKey = ChainDataVersionKey
+    deriving (Eq, Ord, Show)
+
+instance Key ChainDataVersionKey
+instance KeyValue ChainDataVersionKey Word32
+
+instance Serialize ChainDataVersionKey where
+    get = do
+        guard . (== 0x92) =<< S.getWord8
+        return ChainDataVersionKey
+    put ChainDataVersionKey = S.putWord8 0x92
 
 data ChainState = ChainState
     { syncingPeer :: !(Maybe Peer)
@@ -112,13 +130,30 @@ chain cfg = do
     net = chainConfNetwork cfg
     run = do
         db <- asks headerDB
-        m :: Maybe BlockNode <- retrieve db def BestBlockKey
-        when (isNothing m) $ do
+        m :: Maybe Word32 <- retrieve db def ChainDataVersionKey
+        when ((< dataVersion) $ fromMaybe 1 m) $ purgeDB db
+        R.insert db ChainDataVersionKey dataVersion
+        b :: Maybe BlockNode <- retrieve db def BestBlockKey
+        when (isNothing b) $ do
             addBlockHeader (genesisNode net)
             insert db BestBlockKey (genesisNode net)
-        forever $ withSyncLoop (chainConfChain cfg) $ do
-            msg <- receive $ chainConfChain cfg
-            processChainMessage msg
+        forever $
+            withSyncLoop (chainConfChain cfg) $ do
+                msg <- receive $ chainConfChain cfg
+                processChainMessage msg
+
+purgeDB :: MonadUnliftIO m => DB -> m ()
+purgeDB db = runResourceT . R.withIterator db def $ \it -> do
+    R.iterSeek it $ B.singleton 0x90
+    recurse_delete it
+  where
+    recurse_delete it = R.iterKey it >>= \case
+        Nothing -> return ()
+        Just k | B.head k == 0x90 || B.head k == 0x91 -> do
+                 R.delete db def k
+                 R.iterNext it
+                 recurse_delete it
+               | otherwise -> return ()
 
 processChainMessage :: MonadChain m => ChainMessage -> m ()
 processChainMessage (ChainNewHeaders p hcs) = do
@@ -261,7 +296,7 @@ syncHeaders bb p = do
                 , getHeadersBL = loc
                 , getHeadersHashStop =
                       fromRight (error "Could not decode zero hash") . decode $
-                      BS.replicate 32 0
+                      B.replicate 32 0
                 }
     PeerOutgoing m `send` p
 
