@@ -39,13 +39,14 @@ library:
     - string-conversions
     - transformers
 tests:
-  haskoin-node-test:
+  spec:
     main: Spec.hs
     source-dirs: test
-    ghc-options:
-      - -threaded
-      - -rtsopts
-      - -with-rtsopts=-N
+    verbatim:
+      build-tool-depends:
+          hspec-discover:hspec-discover
     dependencies:
-      - haskoin-node
       - hspec
+      - haskoin-node
+      - HUnit
+      - safe
