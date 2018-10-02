@@ -5,10 +5,8 @@
 module Network.Haskoin.Node.Common where
 
 import           Conduit
-import           Data.ByteString             (ByteString)
 import           Data.Conduit.Network
 import           Data.String.Conversions
-import           Data.Text                   (Text)
 import           Data.Time.Clock
 import           Data.Time.Clock.POSIX
 import           Data.Word
@@ -17,11 +15,7 @@ import           Network.Haskoin.Block
 import           Network.Haskoin.Constants
 import           Network.Haskoin.Network
 import           Network.Haskoin.Transaction
-import           Network.Socket              (AddrInfo (..), AddrInfoFlag (..),
-                                              Family (..), NameInfoFlag (..),
-                                              SockAddr (..), SocketType (..),
-                                              addrAddress, defaultHints,
-                                              getAddrInfo, getNameInfo)
+import           Network.Socket              hiding (send)
 import           NQE
 import           Text.Read
 import           UnliftIO
@@ -32,32 +26,26 @@ type Port = Int
 
 -- | Data structure representing an online peer.
 data OnlinePeer = OnlinePeer
-    { onlinePeerAddress     :: !SockAddr
+    { onlinePeerAddress   :: !SockAddr
       -- ^ network address
-    , onlinePeerConnected   :: !Bool
-      -- ^ has it finished handshake
-    , onlinePeerVersion     :: !Word32
+    , onlinePeerVerAck    :: !Bool
+      -- ^ got version acknowledgement from peer
+    , onlinePeerConnected :: !Bool
+      -- ^ peer is connected and ready
+    , onlinePeerVersion   :: !(Maybe Version)
       -- ^ protocol version
-    , onlinePeerServices    :: !Word64
-      -- ^ services field
-    , onlinePeerRemoteNonce :: !Word64
-      -- ^ random nonce sent by peer
-    , onlinePeerUserAgent   :: !ByteString
-      -- ^ user agent string
-    , onlinePeerRelay       :: !Bool
-      -- ^ peer will relay transactions (BIP-37)
-    , onlinePeerAsync       :: !(Async ())
+    , onlinePeerAsync     :: !(Async ())
       -- ^ peer asynchronous process
-    , onlinePeerMailbox     :: !Peer
+    , onlinePeerMailbox   :: !Peer
       -- ^ peer mailbox
-    , onlinePeerNonce       :: !Word64
+    , onlinePeerNonce     :: !Word64
       -- ^ random nonce sent during handshake
-    , onlinePeerPings       :: ![NominalDiffTime]
+    , onlinePeerPings     :: ![NominalDiffTime]
       -- ^ last few ping rountrip duration
     }
 
 -- | Mailbox for a peer process.
-type Peer = Inbox PeerMessage
+type Peer = Inbox Message
 
 -- | Mailbox for chain headers process.
 type Chain = Inbox ChainMessage
@@ -69,129 +57,83 @@ type Manager = Inbox ManagerMessage
 -- created before launching the node. The node will start those processes and
 -- receive any messages sent to those mailboxes.
 data NodeConfig = NodeConfig
-    { maxPeers            :: !Int
+    { nodeConfMaxPeers :: !Int
       -- ^ maximum number of connected peers allowed
-    , database            :: !DB
+    , nodeConfDB       :: !DB
       -- ^ RocksDB database handler
-    , initPeers           :: ![HostPort]
+    , nodeConfPeers    :: ![HostPort]
       -- ^ static list of peers to connect to
-    , discover            :: !Bool
+    , nodeConfDiscover :: !Bool
       -- ^ activate peer discovery
-    , nodeEvents          :: !(Listen NodeEvent)
-      -- ^ listener for events originated by the node
-    , netAddress          :: !NetworkAddress
+    , nodeConfNetAddr  :: !NetworkAddress
       -- ^ network address for the local host
-    , nodeNet             :: !Network
-      -- ^ network constants
-    , nodeConnectInterval :: !Int
-      -- ^ approximately how often to try to connect to peers in seconds
-    , nodeStale           :: !Word32
-      -- ^ how much to wait for results from a peer in seconds
+    , nodeConfNet      :: !Network
+     -- ^ network constants
+    , nodeConfChainPub :: !(Publisher ChainEvent)
+      -- ^ publisher for chain header events
+    , nodeConfPeerPub  :: !(Publisher (Peer, PeerEvent))
     }
 
 -- | Peer manager configuration. Mailbox must be created before starting the
 -- process.
 data ManagerConfig = ManagerConfig
-    { mgrConfMaxPeers        :: !Int
+    { mgrConfMaxPeers :: !Int
       -- ^ maximum number of peers to connect to
-    , mgrConfDB              :: !DB
+    , mgrConfDB       :: !DB
       -- ^ RocksDB database handler to store peer information
-    , mgrConfPeers           :: ![HostPort]
+    , mgrConfChain    :: !Chain
+      -- ^ manager needs to be able to figure out local best block
+    , mgrConfPeers    :: ![HostPort]
       -- ^ static list of peers to connect to
-    , mgrConfDiscover        :: !Bool
+    , mgrConfDiscover :: !Bool
       -- ^ activate peer discovery
-    , mgrConfMgrListener     :: !(Listen ManagerEvent)
-      -- ^ listener for events originating from peer manager
-    , mgrConfPeerListener    :: !(Listen (Peer, PeerEvent))
-      -- ^ listener for events originating from individual peers
-    , mgrConfNetAddr         :: !NetworkAddress
+    , mgrConfNetAddr  :: !NetworkAddress
       -- ^ network address for the local host
-    , mgrConfManager         :: !Manager
+    , mgrConfMailbox  :: !Manager
       -- ^ peer manager mailbox
-    , mgrConfChain           :: !Chain
-      -- ^ chain process mailbox
-    , mgrConfNetwork         :: !Network
+    , mgrConfNetwork  :: !Network
       -- ^ network constants
-    , mgrConfConnectInterval :: !Int
-      -- ^ approximately how often to try to connect to peers in seconds
-    , mgrConfStale           :: !Word32
-      -- ^ how much to wait for results from a peer in seconds
+    , mgrConfPub      :: !(Publisher (Peer, PeerEvent))
+      -- ^ publisher for peer-related messages
     }
-
--- | Event originating from the node. Aggregates events from the peer manager,
--- chain, and any connected peers.
-data NodeEvent
-    = ManagerEvent !ManagerEvent
-      -- ^ event originating from peer manager
-    | ChainEvent !ChainEvent
-      -- ^ event originating from chain process
-    | PeerEvent !(Peer, PeerEvent)
-      -- ^ event originating from a peer
-
--- | Peer manager event.
-data ManagerEvent
-    = ManagerConnect !Peer
-      -- ^ a new peer connected and its handshake completed
-    | ManagerDisconnect !Peer
-      -- ^ a peer disconnected
 
 -- | Messages that can be sent to the peer manager.
 data ManagerMessage
-    = ManagerSetFilter !BloomFilter
-      -- ^ set a bloom filter in all peers
-    | ManagerSetBest !BlockNode
-      -- ^ set our best block
-    | ManagerPing
-      -- ^ internal timer signal that triggers housekeeping tasks
-    | ManagerGetAddr !Peer
-      -- ^ peer requests all peers we know about
-    | ManagerNewPeers !Peer
-                      ![NetworkAddressTime]
-      -- ^ peer sent list of peers it knows about
+    = ConnectToPeers
+      -- ^ try to connect to peers
     | ManagerKill !PeerException
                   !Peer
-      -- ^ please kill this peer with supplied exception
-    | ManagerSetPeerVersion !Peer
-                            !Version
-      -- ^ set version for this peer
-    | ManagerGetPeerVersion !Peer
-                            !(Reply (Maybe Word32))
-      -- ^ get protocol version for this peer
+      -- ^ kill this peer with supplied exception
     | ManagerGetPeers !(Reply [OnlinePeer])
       -- ^ get all connected peers
     | ManagerGetOnlinePeer !Peer !(Reply (Maybe OnlinePeer))
       -- ^ get a peer information
-    | ManagerPeerPing !Peer
-                      !NominalDiffTime
-      -- ^ add a peer roundtrip time for this peer
-    | PeerStopped !(Async (), Either SomeException ())
-      -- ^ peer corresponding to 'Async' has stopped
     | PurgePeers
+      -- ^ delete all known peers
+    | PeerStopped !(Async ())
+      -- ^ the peer corresponding to this async died
+    | PeerRoundTrip !Peer !NominalDiffTime
+      -- ^ roundtrip from a peer ping
 
 -- | Configuration for the chain process.
 data ChainConfig = ChainConfig
-    { chainConfDB       :: !DB
+    { chainConfDB      :: !DB
       -- ^ RocksDB database handle
-    , chainConfListener :: !(Listen ChainEvent)
-      -- ^ listener for events originating from the chain process
-    , chainConfManager  :: !Manager
+    , chainConfManager :: !Manager
       -- ^ peer manager mailbox
-    , chainConfChain    :: !Chain
+    , chainConfMailbox :: !Chain
       -- ^ chain process mailbox
-    , chainConfNetwork  :: !Network
+    , chainConfNetwork :: !Network
       -- ^ network constants
+    , chainConfPub     :: !(Publisher ChainEvent)
+      -- ^ publisher for header chain events
+    , chainConfPeerPub :: !(Publisher (Peer, PeerEvent))
+      -- ^ publisher for peer events
     }
 
 -- | Messages that can be sent to the chain process.
 data ChainMessage
-    = ChainNewHeaders !Peer
-                      ![BlockHeaderCount]
-      -- ^ peer sent some block headers
-    | ChainNewPeer !Peer
-      -- ^ a new peer connected
-    | ChainRemovePeer !Peer
-      -- ^ a peer disconnected
-    | ChainGetBest !(Reply BlockNode)
+    = ChainGetBest !(Reply BlockNode)
       -- ^ get best block known
     | ChainGetAncestor !BlockHeight
                        !BlockNode
@@ -204,10 +146,6 @@ data ChainMessage
     | ChainGetBlock !BlockHash
                     !(Reply (Maybe BlockNode))
       -- ^ get a block header
-    | ChainNewBlocks !Peer ![BlockHash]
-      -- ^ peer sent block inventory
-    | ChainSendHeaders !Peer
-      -- ^ peer asks for our block headers in the future
     | ChainIsSynced !(Reply Bool)
       -- ^ is chain in sync with network?
     | ChainPing
@@ -215,7 +153,7 @@ data ChainMessage
 
 -- | Events originating from chain process.
 data ChainEvent
-    = ChainNewBest !BlockNode
+    = ChainBestBlock !BlockNode
       -- ^ chain has new best block
     | ChainSynced !BlockNode
       -- ^ chain is in sync with the network
@@ -223,23 +161,13 @@ data ChainEvent
 
 -- | Configuration for a particular peer.
 data PeerConfig = PeerConfig
-    { peerConfManager  :: !Manager
-      -- ^ peer manager mailbox
-    , peerConfChain    :: !Chain
-      -- ^ chain process mailbox
-    , peerConfListener :: !(Listen (Peer, PeerEvent))
-      -- ^ listener for peer events
-    , peerConfNetwork  :: !Network
+    { peerConfPub     :: !(Publisher (Peer, PeerEvent))
+      -- ^ publisher for peer events
+    , peerConfNetwork :: !Network
       -- ^ network constants
-    , peerConfName     :: !Text
+    , peerConfAddress :: !SockAddr
       -- ^ peer name
-    , peerConfConnect  :: !((NetConduits IO -> IO ()) -> IO ())
-      -- ^ peer connection
-    , peerConfVersion  :: !Version
-      -- ^ peer version
-    , peerConfStale    :: !Word32
-      -- ^ how long to wait for a peer to respond to requests in seconds
-    , peerConfMailbox  :: !Peer
+    , peerConfMailbox :: !Peer
       -- ^ mailbox for this peer
     }
 
@@ -247,6 +175,8 @@ data PeerConfig = PeerConfig
 data PeerException
     = PeerMisbehaving !String
       -- ^ peer was a naughty boy
+    | DuplicateVersion
+      -- ^ peer sent another version message
     | DecodeMessageError !String
       -- ^ incoming message could not be decoded
     | CannotDecodePayload !String
@@ -256,13 +186,13 @@ data PeerException
     | PayloadTooLarge !Word32
       -- ^ message payload too large
     | PeerAddressInvalid
-      -- ^ peer address did not parse with 'fromSockAddr'
+      -- ^ peer address not valid
     | BloomFiltersNotSupported
       -- ^ peer does not support bloom filters
     | PeerSentBadHeaders
       -- ^ peer sent wrong headers
     | NotNetworkPeer
-      -- ^ peer is SPV and cannot serve blockchain data
+      -- ^ peer cannot serve blockchain data
     | PeerNoSegWit
       -- ^ peer has no segwit support
     | PeerTimeout
@@ -273,45 +203,14 @@ data PeerException
 
 instance Exception PeerException
 
--- | Events originating from a peer.
+-- | Events concerning a peer.
 data PeerEvent
-    = TxAvail ![TxHash]
-      -- ^ peer sent transaction inventory
-    | GotBlock !Block
-      -- ^ peer sent a 'Block'
-    | GotMerkleBlock !MerkleBlock
-      -- ^ peer sent a 'MerkleBlock'
-    | GotTx !Tx
-      -- ^ peer sent a 'Tx'
-    | GotPong !Word64
-      -- ^ peer responded to a 'Ping'
-    | SendBlocks !GetBlocks
-      -- ^ peer is requesting some blocks
-    | SendHeaders !GetHeaders
-      -- ^ peer is requesting some headers
-    | SendData ![InvVector]
-      -- ^ per is requesting an inventory
-    | TxNotFound !TxHash
-      -- ^ peer could not find transaction
-    | BlockNotFound !BlockHash
-      -- ^ peer could not find block
-    | WantMempool
-      -- ^ peer wants our mempool
-    | Rejected !Reject
-      -- ^ peer rejected something we sent
-
--- | Internal type for peer messages.
-data PeerMessage
-    = PeerOutgoing !Message
-    | PeerIncoming !Message
-
-data NetConduits m = NetConduits
-  { getNetSource :: ConduitT () ByteString m ()
-  , getNetSink   :: ConduitT ByteString Void m ()
-  }
+    = PeerMessage !Message
+    | PeerConnected
+    | PeerDisconnected
 
 -- | Convert a host and port into a list of matching 'SockAddr'.
-toSockAddr :: (MonadUnliftIO m) => HostPort -> m [SockAddr]
+toSockAddr :: MonadUnliftIO m => HostPort -> m [SockAddr]
 toSockAddr (host, port) = go `catch` e
   where
     go =
@@ -334,8 +233,8 @@ fromSockAddr ::
 fromSockAddr sa = go `catch` e
   where
     go = do
-        (hostM, portM) <- liftIO (getNameInfo flags True True sa)
-        return $ (,) <$> hostM <*> (readMaybe =<< portM)
+        (maybe_host, maybe_port) <- liftIO (getNameInfo flags True True sa)
+        return $ (,) <$> maybe_host <*> (readMaybe =<< maybe_port)
     flags = [NI_NUMERICHOST, NI_NUMERICSERV]
     e :: Monad m => SomeException -> m (Maybe a)
     e _ = return Nothing
@@ -348,18 +247,6 @@ computeTime = round <$> liftIO getPOSIXTime
 myVersion :: Word32
 myVersion = 70012
 
--- | Set best block in the manager.
-managerSetBest :: MonadIO m => BlockNode -> Manager -> m ()
-managerSetBest bn mgr = ManagerSetBest bn `send` mgr
-
--- | Set version of peer in manager.
-managerSetPeerVersion :: MonadIO m => Peer -> Version -> Manager -> m ()
-managerSetPeerVersion p v mgr = ManagerSetPeerVersion p v `send` mgr
-
--- | Get version of peer from manager.
-managerGetPeerVersion :: MonadIO m => Peer -> Manager -> m (Maybe Word32)
-managerGetPeerVersion p mgr = ManagerGetPeerVersion p `query` mgr
-
 -- | Get list of peers from manager.
 managerGetPeers :: MonadIO m => Manager -> m [OnlinePeer]
 managerGetPeers mgr = ManagerGetPeers `query` mgr
@@ -368,26 +255,13 @@ managerGetPeers mgr = ManagerGetPeers `query` mgr
 managerGetPeer :: MonadIO m => Manager -> Peer -> m (Maybe OnlinePeer)
 managerGetPeer mgr p = ManagerGetOnlinePeer p `query` mgr
 
--- | Ask manager to send all known peers to a peer.
-managerGetAddr :: MonadIO m => Peer -> Manager -> m ()
-managerGetAddr p mgr = ManagerGetAddr p `send` mgr
-
 -- | Ask manager to kill a peer with the provided exception.
 managerKill :: MonadIO m => PeerException -> Peer -> Manager -> m ()
 managerKill e p mgr = ManagerKill e p `send` mgr
 
--- | Peer sends manager list of known peers.
-managerNewPeers ::
-       MonadIO m => Peer -> [NetworkAddressTime] -> Manager -> m ()
-managerNewPeers p as mgr = ManagerNewPeers p as `send` mgr
-
--- | Set bloom filters in peer manager.
-setManagerFilter :: MonadIO m => BloomFilter -> Manager -> m ()
-setManagerFilter bf mgr = ManagerSetFilter bf `send` mgr
-
 -- | Send a network message to peer.
 sendMessage :: MonadIO m => Message -> Peer -> m ()
-sendMessage msg p = PeerOutgoing msg `send` p
+sendMessage msg p = msg `send` p
 
 -- | Upload bloom filter to remote peer.
 peerSetFilter :: MonadIO m => BloomFilter -> Peer -> m ()
@@ -399,14 +273,14 @@ getMerkleBlocks ::
     => Peer
     -> [BlockHash]
     -> m ()
-getMerkleBlocks p bhs = PeerOutgoing (MGetData (GetData ivs)) `send` p
+getMerkleBlocks p bhs = MGetData (GetData ivs) `send` p
   where
     ivs = map (InvVector InvMerkleBlock . getBlockHash) bhs
 
 -- | Request full blocks from peer.
 peerGetBlocks ::
        MonadIO m => Network -> Peer -> [BlockHash] -> m ()
-peerGetBlocks net p bhs = PeerOutgoing (MGetData (GetData ivs)) `send` p
+peerGetBlocks net p bhs = MGetData (GetData ivs) `send` p
   where
     con
         | getSegWit net = InvWitnessBlock
@@ -415,7 +289,7 @@ peerGetBlocks net p bhs = PeerOutgoing (MGetData (GetData ivs)) `send` p
 
 -- | Request transactions from peer.
 peerGetTxs :: MonadIO m => Network -> Peer -> [TxHash] -> m ()
-peerGetTxs net p ths = PeerOutgoing (MGetData (GetData ivs)) `send` p
+peerGetTxs net p ths = MGetData (GetData ivs) `send` p
   where
     con
         | getSegWit net = InvWitnessTx
@@ -445,14 +319,6 @@ buildVersion net nonce height loc rmt = do
             , startHeight = height
             , relay = True
             }
-
--- | Notify chain of a new peer that connected.
-chainNewPeer :: MonadIO m => Peer -> Chain -> m ()
-chainNewPeer p ch = ChainNewPeer p `send` ch
-
--- | Notify chain that a peer has disconnected.
-chainRemovePeer :: MonadIO m => Peer -> Chain -> m ()
-chainRemovePeer p ch = ChainRemovePeer p `send` ch
 
 -- | Get a block header from chain process.
 chainGetBlock :: MonadIO m => BlockHash -> Chain -> m (Maybe BlockNode)
@@ -497,14 +363,12 @@ chainBlockMain bh ch =
 chainIsSynced :: MonadIO m => Chain -> m Bool
 chainIsSynced ch = ChainIsSynced `query` ch
 
--- | Connect to the network
-withConnection :: (MonadUnliftIO m) => SockAddr -> (NetConduits m -> m a) -> m a
+-- | Connect via TCP.
+withConnection ::
+       MonadUnliftIO m => SockAddr -> (AppData -> m a) -> m a
 withConnection na f =
     fromSockAddr na >>= \case
-        Nothing ->
-            throwIO PeerAddressInvalid
+        Nothing -> throwIO PeerAddressInvalid
         Just (host, port) ->
             let cset = clientSettings port (cs host)
-            in runGeneralTCPClient cset $ \ad ->
-              let nc = NetConduits (appSource ad) (appSink ad)
-              in f nc
+             in runGeneralTCPClient cset f

@@ -6,22 +6,23 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ## 0.7.0
 ### Added
-- Versions for chain and peer database.
+- Versioning for chain and peer database.
 - Automatic purging of chain and peer database when version changes.
 
 ### Changed
-- New version of `haskoin-core`.
-- New version of `rocksdb-query`.
-- Add `data-default` dependency.
-- Refactor peer to make it easier to test in the future.
-- Connect to one peer at a time.
-- Allow configurable timeouts for manager and peer.
+- Full reimplementation of node API.
+- Simplify peer selection and management.
+- Use PubSub for chain and peer.
+- Merge manager and peer events.
+- Rename configuration variables for node.
 
 ### Removed
 - Remove irrelevant fields from peer information.
 - Remove peer block head tracking.
-- Remove dependency on binary conduits.
-- Simplify peer selection and management.
+- Remove binary conduits.
+- Remove Bloom filter support from manager.
+- Remove peer request tracking code.
+- Remove separate manager events.
 
 ## 0.6.1
 ### Changed

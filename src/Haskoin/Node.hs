@@ -1,22 +1,23 @@
 {-# LANGUAGE FlexibleContexts      #-}
 {-# LANGUAGE GADTs                 #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE RecordWildCards       #-}
 module Haskoin.Node
-    ( Host, Port, HostPort
-    , Peer, Chain, Manager
+    ( Host
+    , Port
+    , HostPort
+    , Peer
+    , Chain
+    , Manager
     , OnlinePeer(..)
     , NodeConfig(..)
-    , NodeEvent(..)
-    , ManagerEvent(..)
     , ChainEvent(..)
     , PeerEvent(..)
     , PeerException(..)
     , withNode
-    , managerGetPeerVersion
     , managerGetPeers
     , managerGetPeer
     , managerKill
-    , setManagerFilter
     , sendMessage
     , getMerkleBlocks
     , peerGetBlocks
@@ -35,7 +36,6 @@ import           Control.Monad.Logger
 import           Network.Haskoin.Node.Chain
 import           Network.Haskoin.Node.Common
 import           Network.Haskoin.Node.Manager
-import           Network.Haskoin.Node.Peer
 import           NQE
 import           UnliftIO
 
@@ -46,35 +46,41 @@ withNode ::
     => NodeConfig
     -> ((Manager, Chain) -> m a)
     -> m a
-withNode cfg f = do
-    c <- newInbox =<< newTQueueIO
-    m <- newInbox =<< newTQueueIO
-    withAsync (chain (chain_conf c m)) $ \ch ->
-        withAsync (manager (manager_conf c m) peer) $ \mgr -> do
-            link ch
-            link mgr
-            f (m, c)
+withNode NodeConfig {..} f = do
+    ch <- newInbox =<< newTQueueIO
+    mgr <- newInbox =<< newTQueueIO
+    let chain_config =
+            ChainConfig
+                { chainConfDB = db
+                , chainConfManager = mgr
+                , chainConfMailbox = ch
+                , chainConfNetwork = net
+                , chainConfPub = chain_pub
+                , chainConfPeerPub = peer_pub
+                }
+        mgr_config =
+            ManagerConfig
+                { mgrConfMaxPeers = max_peers
+                , mgrConfDB = db
+                , mgrConfChain = ch
+                , mgrConfPeers = peers
+                , mgrConfDiscover = discover
+                , mgrConfNetAddr = net_addr
+                , mgrConfMailbox = mgr
+                , mgrConfNetwork = net
+                , mgrConfPub = peer_pub
+                }
+    withAsync (chain chain_config) $ \a -> do
+        link a
+        withAsync (manager mgr_config) $ \b -> do
+            link b
+            f (mgr, ch)
   where
-    chain_conf c m =
-        ChainConfig
-            { chainConfDB = database cfg
-            , chainConfListener = nodeEvents cfg . ChainEvent
-            , chainConfManager = m
-            , chainConfChain = c
-            , chainConfNetwork = nodeNet cfg
-            }
-    manager_conf c m =
-        ManagerConfig
-            { mgrConfMaxPeers = maxPeers cfg
-            , mgrConfDB = database cfg
-            , mgrConfDiscover = discover cfg
-            , mgrConfMgrListener = nodeEvents cfg . ManagerEvent
-            , mgrConfPeerListener = nodeEvents cfg . PeerEvent
-            , mgrConfNetAddr = netAddress cfg
-            , mgrConfPeers = initPeers cfg
-            , mgrConfManager = m
-            , mgrConfChain = c
-            , mgrConfNetwork = nodeNet cfg
-            , mgrConfConnectInterval = nodeConnectInterval cfg
-            , mgrConfStale = nodeStale cfg
-            }
+    db = nodeConfDB
+    net = nodeConfNet
+    chain_pub = nodeConfChainPub
+    peer_pub = nodeConfPeerPub
+    peers = nodeConfPeers
+    discover = nodeConfDiscover
+    max_peers = nodeConfMaxPeers
+    net_addr = nodeConfNetAddr

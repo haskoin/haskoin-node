@@ -38,6 +38,7 @@ library:
     - rocksdb-query
     - string-conversions
     - transformers
+    - unordered-containers
 tests:
   spec:
     main: Spec.hs
@@ -47,6 +48,7 @@ tests:
           hspec-discover:hspec-discover
     dependencies:
       - hspec
+      - haskoin-core
       - haskoin-node
       - HUnit
       - safe
