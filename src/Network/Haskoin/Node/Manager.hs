@@ -463,9 +463,6 @@ announcePeer p =
             | isJust onlinePeerVersion && onlinePeerVerAck -> do
                 listen <- mgrConfEvents <$> asks myConfig
                 unless onlinePeerConnected $ do
-                    $(logInfoS) "Manager" $
-                        "Connected to " <> cs (show onlinePeerAddress)
-                    logPeersConnected
                     atomically . listen $ PeerConnected p
                     setPeerAnnounced p
                     getPeer onlinePeerAddress >>= \case
@@ -482,6 +479,9 @@ announcePeer p =
                                      then 0
                                      else score - 1)
                                 timestamp
+                    $(logInfoS) "Manager" $
+                        "Connected to " <> cs (show onlinePeerAddress)
+                    logPeersConnected
             | otherwise -> return ()
 
 getPeers :: MonadManager m => m [OnlinePeer]
