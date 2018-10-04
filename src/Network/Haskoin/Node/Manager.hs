@@ -262,25 +262,13 @@ getNewPeer :: (MonadUnliftIO m, MonadManager m) => m (Maybe SockAddr)
 getNewPeer = do
     ManagerConfig {..} <- asks myConfig
     oas <- map onlinePeerAddress <$> getOnlinePeers
-    now <- computeTime
     let db = mgrConfDB
     U.runResourceT . runConduit $
-        matching db def PeerScoreBase .| filterMC (f now oas) .| mapC g .| headC
+        matching db def PeerScoreBase .| mapC g .| filterC (`notElem` oas) .|
+        headC
   where
-    f now oas (PeerScore _ addr, ())
-        | addr `elem` oas = return False
-        | otherwise =
-            getPeer addr >>= \case
-                Nothing -> r
-                Just (PeerData score timestamp) ->
-                    return $ now > timestamp + fromIntegral score * 30
-    f _ _ _ = r
     g (PeerScore _ addr, ()) = addr
-    g _                      = undefined
-    r = do
-        $(logErrorS) "Manager" "Recovering from corrupted peer database..."
-        purgePeers
-        return False
+    g _ = undefined
 
 purgeDB :: MonadUnliftIO m => DB -> m ()
 purgeDB db = purge_byte 0x81 >> purge_byte 0x83
@@ -370,7 +358,7 @@ managerMessage (ManagerCheckPeer p) =
                 Nothing -> ping_peer
                 Just time -> do
                     now <- liftIO getCurrentTime
-                    if now `diffUTCTime` time > 300
+                    if now `diffUTCTime` time > 30
                         then asks myMailbox >>= managerKill PeerTimeout p
                         else ping_peer
         _ -> return ()
@@ -407,8 +395,14 @@ newNetworkPeers p as =
         forM_ as $ \a -> newPeer mgrConfDB a ((maxBound `div` 4) * 3)
 
 processPeerOffline :: MonadManager m => Child -> Maybe SomeException -> m ()
-processPeerOffline a e = do
+processPeerOffline a e =
     findChild a >>= \case
+        Nothing ->
+            case e of
+                Nothing -> $(logErrorS) "Manager" "Unknown peer died"
+                Just x ->
+                    $(logErrorS) "Manager" $
+                    "Unknown peer died: " <> cs (show x)
         Just OnlinePeer {..} -> do
             if onlinePeerConnected
                 then do
@@ -433,15 +427,9 @@ processPeerOffline a e = do
                              cs (show onlinePeerAddress) <>
                              ": " <>
                              cs (show x)
-            logPeersConnected
+            removePeer a
             downgradePeer onlinePeerAddress
-        Nothing ->
-            case e of
-                Nothing -> $(logErrorS) "Manager" "Unknown peer died"
-                Just x ->
-                    $(logErrorS) "Manager" $
-                    "Unknown peer died: " <> cs (show x)
-    removePeer a
+            logPeersConnected
 
 setPeerVersion :: MonadManager m => Peer -> Version -> m ()
 setPeerVersion p v =
@@ -633,5 +621,5 @@ withConnectLoop :: MonadUnliftIO m => Manager -> (Async a -> m a) -> m a
 withConnectLoop mgr = withAsync go
   where
     go = forever $ do
-        threadDelay =<< liftIO (randomRIO (250 * 1000, 2500 * 1000))
+        threadDelay =<< liftIO (randomRIO (5 * 1000 * 1000, 10 * 1000 * 1000))
         ManagerConnect `send` mgr
