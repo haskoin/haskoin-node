@@ -268,12 +268,12 @@ managerPeerMessage p msg mgr = ManagerPeerMessage p msg `send` mgr
 
 -- | Get list of peers from manager.
 managerGetPeers ::
-       MonadUnliftIO m => Manager -> m [OnlinePeer]
-managerGetPeers mgr = ManagerGetPeers `queryT` mgr
+       MonadIO m => Manager -> m [OnlinePeer]
+managerGetPeers mgr = ManagerGetPeers `query` mgr
 
 -- | Get peer information for a peer from manager.
-managerGetPeer :: MonadUnliftIO m => Manager -> Peer -> m (Maybe OnlinePeer)
-managerGetPeer mgr p = ManagerGetOnlinePeer p `queryT` mgr
+managerGetPeer :: MonadIO m => Peer -> Manager -> m (Maybe OnlinePeer)
+managerGetPeer p mgr = ManagerGetOnlinePeer p `query` mgr
 
 -- | Ask manager to kill a peer with the provided exception.
 managerKill :: MonadIO m => PeerException -> Peer -> Manager -> m ()
@@ -349,17 +349,17 @@ buildVersion net nonce height loc rmt = do
             }
 
 -- | Get a block header from chain process.
-chainGetBlock :: MonadUnliftIO m => BlockHash -> Chain -> m (Maybe BlockNode)
-chainGetBlock bh ch = ChainGetBlock bh `queryT` ch
+chainGetBlock :: MonadIO m => BlockHash -> Chain -> m (Maybe BlockNode)
+chainGetBlock bh ch = ChainGetBlock bh `query` ch
 
 -- | Get best block header from chain process.
-chainGetBest :: MonadUnliftIO m => Chain -> m BlockNode
-chainGetBest ch = ChainGetBest `queryT` ch
+chainGetBest :: MonadIO m => Chain -> m BlockNode
+chainGetBest ch = ChainGetBest `query` ch
 
 -- | Get ancestor of 'BlockNode' at 'BlockHeight' from chain process.
 chainGetAncestor ::
-       MonadUnliftIO m => BlockHeight -> BlockNode -> Chain -> m (Maybe BlockNode)
-chainGetAncestor h n c = ChainGetAncestor h n `queryT` c
+       MonadIO m => BlockHeight -> BlockNode -> Chain -> m (Maybe BlockNode)
+chainGetAncestor h n c = ChainGetAncestor h n `query` c
 
 -- | Get parents of 'BlockNode' starting at 'BlockHeight' from chain process.
 chainGetParents ::
@@ -376,8 +376,8 @@ chainGetParents height top ch = go [] top
 
 -- | Get last common block from chain process.
 chainGetSplitBlock ::
-       MonadUnliftIO m => BlockNode -> BlockNode -> Chain -> m BlockNode
-chainGetSplitBlock l r c = ChainGetSplit l r `queryT` c
+       MonadIO m => BlockNode -> BlockNode -> Chain -> m BlockNode
+chainGetSplitBlock l r c = ChainGetSplit l r `query` c
 
 -- | Notify chain that a new peer is connected.
 chainPeerConnected :: MonadIO m => Peer -> Chain -> m ()
@@ -396,8 +396,8 @@ chainBlockMain bh ch =
             bm@(Just bn) -> (== bm) <$> chainGetAncestor (nodeHeight bn) bb ch
 
 -- | Is chain in sync with network?
-chainIsSynced :: MonadUnliftIO m => Chain -> m Bool
-chainIsSynced ch = ChainIsSynced `queryT` ch
+chainIsSynced :: MonadIO m => Chain -> m Bool
+chainIsSynced ch = ChainIsSynced `query` ch
 
 chainHeaders :: MonadIO m => Peer -> [BlockHeader] -> Chain -> m ()
 chainHeaders p hs ch = ChainHeaders p hs `send` ch

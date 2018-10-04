@@ -46,7 +46,6 @@ dataVersion = 1
 type MonadChain m
      = ( BlockHeaders m
        , MonadLoggerIO m
-       , MonadUnliftIO m
        , MonadReader ChainReader m)
 
 data ChainDataVersionKey = ChainDataVersionKey
@@ -196,7 +195,7 @@ processHeaders p hs =
             2000 -> lift $ syncHeaders (head block_nodes) p
             _    -> synced
 
-chainMessage :: (MonadUnliftIO m, MonadChain m) => ChainMessage -> m ()
+chainMessage :: (MonadChain m) => ChainMessage -> m ()
 chainMessage (ChainGetBest reply) =
     getBestBlockHeader >>= atomically . reply
 
@@ -255,7 +254,7 @@ chainMessage ChainPing = do
                     processSyncQueue
                 | otherwise -> return ()
 
-processSyncQueue :: (MonadUnliftIO m, MonadChain m) => m ()
+processSyncQueue :: (MonadChain m) => m ()
 processSyncQueue = do
     s <- asks chainState >>= readTVarIO
     when (isNothing (syncingPeer s)) $ getBestBlockHeader >>= go s
@@ -290,10 +289,10 @@ syncHeaders bb p = do
         fromRight (error "Could not decode zero hash") . decode $
         B.replicate 32 0x00
 
-peerString :: (MonadUnliftIO m, MonadChain m, IsString a) => Peer -> m a
+peerString :: (MonadChain m, IsString a) => Peer -> m a
 peerString p = do
     mgr <- chainConfManager <$> asks myConfig
-    managerGetPeer mgr p >>= \case
+    managerGetPeer p mgr >>= \case
         Nothing -> return "[unknown]"
         Just o -> return $ fromString $ show (onlinePeerAddress o)
 

@@ -12,6 +12,7 @@ import           Control.Monad.Logger
 import           Control.Monad.Trans
 import qualified Data.ByteString      as BS
 import           Data.Either
+import           Data.Maybe
 import           Data.Serialize
 import qualified Database.RocksDB     as R
 import           Haskoin
@@ -31,14 +32,11 @@ data TestNode = TestNode
 spec :: Spec
 spec = do
     let net = btcTest
-    describe "node on test network" $ do
-        it "connects to a peer" $
+    describe "peer manager on test network" $ do
+        it "connects to at a couple of peers" $
             withTestNode net "connect-one-peer" $ \TestNode {..} -> do
-                p <- waitForPeer nodeEvents
-                v <-
-                    maybe (error "No online peer") onlinePeerVersion <$>
-                    managerGetPeer testMgr p
-                v `shouldSatisfy` maybe False ((>= 70002) . version)
+                ver <- onlinePeerVersion <$> waitForPeer testMgr nodeEvents
+                ver `shouldSatisfy` maybe False ((>= 70002) . version)
         it "downloads some blocks" $
             withTestNode net "get-blocks" $ \TestNode {..} -> do
                 let hs = [h1, h2]
@@ -46,13 +44,20 @@ spec = do
                         "000000000babf10e26f6cba54d9c282983f1d1ce7061f7e875b58f8ca47db932"
                     h2 =
                         "00000000851f278a8b2c466717184aae859af5b83c6f850666afbc349cf61577"
-                p <- waitForPeer nodeEvents
-                peerGetBlocks net p hs
-                [b1, b2] <-
-                    replicateM 2 . receiveMatch nodeEvents $ \case
-                        PeerEvent (PeerMessage p' (MBlock b))
-                            | p == p' -> Just b
-                        _ -> Nothing
+                let get_blocks =
+                        waitForPeer testMgr nodeEvents >>= \op -> do
+                            let p = onlinePeerMailbox op
+                            peerGetBlocks net p hs
+                            bs <-
+                                fmap catMaybes .
+                                replicateM 2 . receiveMatchS 30 nodeEvents $ \case
+                                    PeerEvent (PeerMessage p' (MBlock b))
+                                        | p == p' -> Just b
+                                    _ -> Nothing
+                            case length bs of
+                                2 -> return bs
+                                _ -> get_blocks
+                [b1, b2] <- get_blocks
                 headerHash (blockHeader b1) `shouldSatisfy` (`elem` hs)
                 headerHash (blockHeader b2) `shouldSatisfy` (`elem` hs)
                 let testMerkle b =
@@ -60,12 +65,41 @@ spec = do
                         buildMerkleRoot (map txHash (blockTxns b))
                 testMerkle b1
                 testMerkle b2
-        it "connects to multiple peers" $
-            withTestNode net "connect-peers" $ \TestNode {..} -> do
-                replicateM_ 2 $ waitForPeer nodeEvents
-                ps <- managerGetPeers testMgr
-                length ps `shouldSatisfy` (>= 2)
-        it "connects and syncs some headers" $
+        it "connects to two peers" $
+            withTestNode net "connect-peers" $ \TestNode {..} ->
+                replicateM_ 2 (waitForPeer testMgr nodeEvents) `shouldReturn` ()
+        it "attempts to get inexistent things" $
+            withTestNode net "download-fail" $ \TestNode {..} -> do
+                let h =
+                        TxHash .
+                        fromRight (error "We will, we will rock you!") . decode $
+                        BS.replicate 32 0xaa
+                let get_tx = do
+                        p <-
+                            onlinePeerMailbox <$> waitForPeer testMgr nodeEvents
+                        peerGetTxs net p [h]
+                        r <- liftIO randomIO
+                        MPing (Ping r) `send` p
+                        m <-
+                            timeout (5 * 1000 * 1000) $
+                            receiveMatch nodeEvents $ \case
+                                PeerEvent (PeerMessage p' (MNotFound (NotFound (InvVector _ h':_))))
+                                    | p == p' -> Just (Right h')
+                                PeerEvent (PeerMessage p' (MPong (Pong r')))
+                                    | p == p' -> Just (Left r')
+                                _ -> Nothing
+                        case m of
+                            Nothing ->
+                                throwString "Timeout getting inexistent tx"
+                            Just (Right n) -> return n
+                            Just (Left r') ->
+                                if r == r'
+                                    then get_tx
+                                    else throwString
+                                             "Wrong pong after inexistent tx request"
+                get_tx `shouldReturn` getTxHash h
+    describe "chain on test network" $ do
+        it "syncs some headers" $
             withTestNode net "connect-sync" $ \TestNode {..} -> do
                 let h =
                         "000000009ec921df4bb16aedd11567e27ede3c0b63835b257475d64a059f102b"
@@ -86,40 +120,6 @@ spec = do
                     chainGetAncestor 2357 (last bns) testChain
                 map (headerHash . nodeHeader) bns `shouldBe` hs
                 headerHash (nodeHeader an) `shouldBe` h
-        it "downloads a single block" $
-            withTestNode net "download-block" $ \TestNode {..} -> do
-                let h =
-                        "000000009ec921df4bb16aedd11567e27ede3c0b63835b257475d64a059f102b"
-                p <- waitForPeer nodeEvents
-                peerGetBlocks net p [h]
-                b <-
-                    receiveMatch nodeEvents $ \case
-                        PeerEvent (PeerMessage p' (MBlock (Block b _)))
-                            | p == p' -> Just b
-                        _ -> Nothing
-                headerHash b `shouldBe` h
-        it "attempts to get inexistent things" $
-            withTestNode net "download-fail" $ \TestNode {..} -> do
-                let h =
-                        TxHash .
-                        fromRight (error "We will, we will rock you!") . decode $
-                        BS.replicate 32 0xaa
-                p <-
-                    receiveMatch nodeEvents $ \case
-                        PeerEvent (PeerConnected p) -> Just p
-                        _ -> Nothing
-                peerGetTxs net p [h]
-                r <- liftIO randomIO
-                MPing (Ping r) `send` p
-                m <-
-                    receiveMatch nodeEvents $ \case
-                        PeerEvent (PeerMessage p' m@MNotFound {})
-                            | p == p' -> Just m
-                        PeerEvent (PeerMessage p' m@(MPong (Pong r')))
-                            | p == p' && r == r' -> Just m
-                        _ -> Nothing
-                m `shouldBe`
-                    MNotFound (NotFound [InvVector InvWitnessTx (getTxHash h)])
         it "downloads some block parents" $
             withTestNode net "parents" $ \TestNode {..} -> do
                 let hs =
@@ -128,7 +128,8 @@ spec = do
                         , "00000000a6299059b2bff3479bc569019792e75f3c0f39b10a0bc85eac1b1615"
                         ]
                 [_, bn] <-
-                    replicateM 2 $ receiveMatch nodeEvents $ \case
+                    replicateM 2 $
+                    receiveMatch nodeEvents $ \case
                         ChainEvent (ChainBestBlock bn) -> Just bn
                         _ -> Nothing
                 nodeHeight bn `shouldBe` 2000
@@ -137,11 +138,16 @@ spec = do
                 forM_ (zip ps hs) $ \(p, h) ->
                     headerHash (nodeHeader p) `shouldBe` h
 
-waitForPeer :: MonadIO m => Inbox NodeEvent -> m Peer
-waitForPeer mailbox =
-    receiveMatch mailbox $ \case
-        PeerEvent (PeerConnected p) -> Just p
-        _ -> Nothing
+waitForPeer :: MonadIO m => Manager -> Inbox NodeEvent -> m OnlinePeer
+waitForPeer mgr mailbox = do
+    p <-
+        receiveMatch mailbox $ \case
+            PeerEvent (PeerConnected p) -> return p
+            _ -> Nothing
+    managerGetPeer p mgr >>= \case
+        Just op -> return op
+        Nothing ->
+            throwString "Got a peer connected event but could not get peer data"
 
 withTestNode ::
        MonadUnliftIO m

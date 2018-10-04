@@ -50,7 +50,7 @@ dataVersion :: Word32
 dataVersion = 3
 
 type MonadManager m
-     = (MonadUnliftIO m, MonadLoggerIO m, MonadReader ManagerReader m)
+     = (MonadLoggerIO m, MonadReader ManagerReader m)
 
 type Score = Word8
 
@@ -184,7 +184,7 @@ manager cfg@ManagerConfig {..} inbox = do
             forever $ receive inbox >>= managerMessage
     f (a, mex) = ManagerPeerDied a mex `sendSTM` mgr
 
-populatePeers :: MonadManager m => m ()
+populatePeers :: (MonadUnliftIO m, MonadManager m) => m ()
 populatePeers = do
     ManagerConfig {..} <- asks myConfig
     add mgrConfDB mgrConfPeers 4
@@ -258,7 +258,7 @@ downgradePeer sa = do
                      else score + 1)
                 now
 
-getNewPeer :: MonadManager m => m (Maybe SockAddr)
+getNewPeer :: (MonadUnliftIO m, MonadManager m) => m (Maybe SockAddr)
 getNewPeer = do
     ManagerConfig {..} <- asks myConfig
     oas <- map onlinePeerAddress <$> getOnlinePeers
@@ -302,13 +302,13 @@ purgeDB db = purge_byte 0x81 >> purge_byte 0x83
 getConnectedPeers :: MonadManager m => m [OnlinePeer]
 getConnectedPeers = filter onlinePeerConnected <$> getOnlinePeers
 
-purgePeers :: MonadManager m => m ()
+purgePeers :: (MonadUnliftIO m, MonadManager m) => m ()
 purgePeers = do
     ops <- readTVarIO =<< asks onlinePeers
-    forM_ ops $ \op -> onlinePeerAsync op `cancelWith` PurgingPeer
+    forM_ ops $ \OnlinePeer {..} -> killPeer PurgingPeer onlinePeerMailbox
     asks myConfig >>= purgeDB . mgrConfDB
 
-managerMessage :: MonadManager m => ManagerMessage -> m ()
+managerMessage :: (MonadUnliftIO m, MonadManager m) => ManagerMessage -> m ()
 
 managerMessage (ManagerPeerMessage p (MVersion ver)) = setPeerVersion p ver
 
@@ -351,15 +351,9 @@ managerMessage (ManagerBestBlock h) =
 
 managerMessage ManagerConnect = connectNewPeers
 
-managerMessage (ManagerKill e p) =
-    findPeer p >>= \case
-        Nothing -> return ()
-        Just op -> do
-            $(logErrorS) "Manager" $
-                "Killing peer " <> cs (show (onlinePeerAddress op))
-            onlinePeerAsync op `cancelWith` e
+managerMessage (ManagerKill e p) = killPeer e p
 
-managerMessage (ManagerPeerDied a _) = processPeerOffline a >> connectNewPeers
+managerMessage (ManagerPeerDied a e) = processPeerOffline a e >> connectNewPeers
 
 managerMessage ManagerPurgePeers = purgePeers
 
@@ -379,14 +373,24 @@ managerMessage (ManagerCheckPeer p) =
                     now <- liftIO getCurrentTime
                     if now `diffUTCTime` time > 300
                         then asks myMailbox >>= managerKill PeerTimeout p
-                        else ping_peer
+                        else when onlinePeerConnected ping_peer
   where
     ping_peer = do
         n <- liftIO randomIO
         now <- liftIO getCurrentTime
-        MPing (Ping n) `sendMessage` p
         modifyPeer p $ \x ->
             x {onlinePeerPingTime = Just now, onlinePeerPingNonce = Just n}
+        MPing (Ping n) `sendMessage` p
+
+killPeer :: MonadManager m => PeerException -> Peer -> m ()
+killPeer e p =
+    findPeer p >>= \case
+        Nothing -> return ()
+        Just op -> do
+            $(logErrorS) "Manager" $
+                "Killing peer " <> cs (show (onlinePeerAddress op)) <> ": " <>
+                cs (show e)
+            onlinePeerAsync op `cancelWith` e
 
 samplePing :: MonadManager m => Peer -> NominalDiffTime -> m ()
 samplePing p n =
@@ -402,22 +406,41 @@ newNetworkPeers p as =
             "Received " <> cs (show (length as)) <> " peers from " <> cs pn
         forM_ as $ \a -> newPeer mgrConfDB a ((maxBound `div` 4) * 3)
 
-processPeerOffline :: MonadManager m => Child -> m ()
-processPeerOffline a = do
+processPeerOffline :: MonadManager m => Child -> Maybe SomeException -> m ()
+processPeerOffline a e = do
     findChild a >>= \case
         Just OnlinePeer {..} -> do
             if onlinePeerConnected
                 then do
-                    $(logWarnS) "Manager" $
-                        "Disconnected peer " <> cs (show onlinePeerAddress)
+                    case e of
+                        Nothing ->
+                            $(logWarnS) "Manager" $
+                            "Disconnected peer " <> cs (show onlinePeerAddress)
+                        Just x ->
+                            $(logErrorS) "Manager" $
+                            "Peer " <> cs (show onlinePeerAddress) <> " died: " <>
+                            cs (show x)
                     listen <- mgrConfEvents <$> asks myConfig
-                    let p = onlinePeerMailbox
-                    atomically . listen $ PeerDisconnected p
-                else $(logWarnS) "Manager" $
-                     "Could not connect to peer " <> cs (show onlinePeerAddress)
+                    atomically . listen $ PeerDisconnected onlinePeerMailbox
+                else case e of
+                         Nothing ->
+                             $(logWarnS) "Manager" $
+                             "Could not connect to peer " <>
+                             cs (show onlinePeerAddress)
+                         Just x ->
+                             $(logErrorS) "Manager" $
+                             "Could not connect to peer " <>
+                             cs (show onlinePeerAddress) <>
+                             ": " <>
+                             cs (show x)
             logPeersConnected
             downgradePeer onlinePeerAddress
-        Nothing -> $(logErrorS) "Manager" "Could not find dead peer"
+        Nothing ->
+            case e of
+                Nothing -> $(logErrorS) "Manager" "Unknown peer died"
+                Just x ->
+                    $(logErrorS) "Manager" $
+                    "Unknown peer died: " <> cs (show x)
     removePeer a
 
 setPeerVersion :: MonadManager m => Peer -> Version -> m ()
@@ -426,12 +449,12 @@ setPeerVersion p v =
         Nothing -> $(logErrorS) "Manager" "Could not find peer to set version"
         Just OnlinePeer {..}
             | isJust onlinePeerVersion ->
-                onlinePeerAsync `cancelWith` DuplicateVersion
-            | otherwise -> do
-                modifyPeer p $ \s -> s {onlinePeerVersion = Just v}
+                killPeer DuplicateVersion onlinePeerMailbox
+            | otherwise ->
                 runExceptT testVersion >>= \case
-                    Left ex -> onlinePeerAsync `cancelWith` ex
+                    Left ex -> killPeer ex p
                     Right () -> do
+                        modifyPeer p $ \s -> s {onlinePeerVersion = Just v}
                         MVerAck `sendMessage` p
                         askForPeers
                         announcePeer p
@@ -480,7 +503,7 @@ getPeers = sortBy (compare `on` f) <$> getConnectedPeers
 getOnlinePeer :: MonadManager m => Peer -> m (Maybe OnlinePeer)
 getOnlinePeer p = find ((== p) . onlinePeerMailbox) <$> getConnectedPeers
 
-connectNewPeers :: MonadManager m => m ()
+connectNewPeers :: (MonadUnliftIO m, MonadManager m) => m ()
 connectNewPeers = do
     ManagerConfig {..} <- asks myConfig
     os <- getOnlinePeers
