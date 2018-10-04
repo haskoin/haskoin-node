@@ -16,6 +16,7 @@ module Haskoin.Node
     , PeerEvent(..)
     , PeerException(..)
     , withNode
+    , node
     , managerGetPeers
     , managerGetPeer
     , managerKill
