@@ -166,14 +166,15 @@ processHeaders p hs =
         let net = chainConfNetwork
         ChainState {..} <- readTVarIO =<< asks chainState
         guard (syncingPeer == Just p)
-        lift setLastReceived
         now <- computeTime
         cur_best <- getBestBlockHeader
         connectBlocks net now hs >>= \case
-            Right block_nodes -> conn cur_best block_nodes
+            Right block_nodes -> do
+                conn cur_best block_nodes
+                setLastReceived
             Left e -> do
                 $(logWarnS) "Chain" $ "Could not connect headers: " <> cs e
-                pstr <- lift $ peerString p
+                pstr <- peerString p
                 $(logErrorS) "Chain" $
                     "Syncing peer " <> pstr <> " sent bad headers"
                 managerKill PeerSentBadHeaders p chainConfManager
@@ -182,7 +183,7 @@ processHeaders p hs =
         asks chainState >>= \b ->
             atomically . modifyTVar b $ \s -> s {syncingPeer = Nothing}
         MSendHeaders `sendMessage` p
-        lift processSyncQueue
+        processSyncQueue
     conn cur_best block_nodes = do
         ChainConfig {..} <- asks myConfig
         new_best <- getBestBlockHeader
@@ -192,7 +193,7 @@ processHeaders p hs =
                 cs (show (nodeHeight new_best))
             atomically $ chainConfEvents $ ChainBestBlock new_best
         case length hs of
-            2000 -> lift $ syncHeaders (head block_nodes) p
+            2000 -> syncHeaders (head block_nodes) p
             _    -> synced
 
 chainMessage :: (MonadChain m) => ChainMessage -> m ()
@@ -241,17 +242,17 @@ chainMessage ChainPing = do
     ChainConfig {..} <- asks myConfig
     let mgr = chainConfManager
     b <- asks chainState
-    readTVarIO b >>= \s ->
+    readTVarIO b >>= \s -> do
+        now <- liftIO getCurrentTime
+        let waited_enough = 60 < now `diffUTCTime` lastReceived s
         case syncingPeer s of
-            Just p -> do
-                now <- liftIO getCurrentTime
-                when ((now `diffUTCTime` lastReceived s) > 60) $
-                    managerKill PeerTimeout p mgr
+            Just p -> when waited_enough $ managerKill PeerTimeout p mgr
             Nothing
-                | null (newPeers s) -> do
-                    ps <- map onlinePeerMailbox <$> managerGetPeers mgr
-                    atomically . modifyTVar b $ \x -> x {newPeers = ps}
-                    processSyncQueue
+                | null (newPeers s) ->
+                    when waited_enough $ do
+                        ps <- map onlinePeerMailbox <$> managerGetPeers mgr
+                        atomically . modifyTVar b $ \x -> x {newPeers = ps}
+                        processSyncQueue
                 | otherwise -> return ()
 
 processSyncQueue :: (MonadChain m) => m ()
@@ -302,7 +303,7 @@ withSyncLoop ch f = withAsync go $ \a -> link a >> f
     go =
         forever $ do
             threadDelay =<<
-                liftIO (randomRIO (40 * 1000 * 1000, 60 * 1000 * 1000))
+                liftIO (randomRIO (5 * 1000 * 1000, 10 * 1000 * 1000))
             ChainPing `send` ch
 
 setLastReceived :: MonadChain m => m ()

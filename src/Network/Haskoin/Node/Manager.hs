@@ -237,7 +237,7 @@ getPeer sa = mgrConfDB <$> asks myConfig >>= \db -> retrieve db def (PeerAddress
 logPeersConnected :: MonadManager m => m ()
 logPeersConnected = do
     mo <- mgrConfMaxPeers <$> asks myConfig
-    ps <- getOnlinePeers
+    ps <- filter onlinePeerConnected <$> getOnlinePeers
     $(logInfoS) "Manager" $
         "Peers connected: " <> cs (show (length ps)) <> "/" <> cs (show mo)
 
@@ -477,6 +477,7 @@ announcePeer p =
                 unless onlinePeerConnected $ do
                     $(logInfoS) "Manager" $
                         "Connected to " <> cs (show onlinePeerAddress)
+                    logPeersConnected
                     atomically . listen $ PeerConnected p
                     setPeerAnnounced p
                     getPeer onlinePeerAddress >>= \case
