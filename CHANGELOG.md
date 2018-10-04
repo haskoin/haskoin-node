@@ -8,20 +8,20 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 ### Added
 - Versioning for chain and peer database.
 - Automatic purging of chain and peer database when version changes.
+- Add extra timers.
 
 ### Changed
 - Full reimplementation of node API.
 - Simplify peer selection and management.
-- Use PubSub for chain and peer.
 - Merge manager and peer events.
 - Rename configuration variables for node.
 
 ### Removed
 - Remove irrelevant fields from peer information.
-- Remove peer block head tracking.
-- Remove binary conduits.
+- Remove unreliable peer block head tracking.
+- Remove dependency on deprecated binary conduits.
 - Remove Bloom filter support from manager.
-- Remove peer request tracking code.
+- Remove unreliable peer request tracking code.
 - Remove separate manager events.
 
 ## 0.6.1
