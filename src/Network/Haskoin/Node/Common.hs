@@ -363,7 +363,7 @@ chainGetAncestor h n c = ChainGetAncestor h n `query` c
 
 -- | Get parents of 'BlockNode' starting at 'BlockHeight' from chain process.
 chainGetParents ::
-       MonadUnliftIO m => BlockHeight -> BlockNode -> Chain -> m [BlockNode]
+       MonadIO m => BlockHeight -> BlockNode -> Chain -> m [BlockNode]
 chainGetParents height top ch = go [] top
   where
     go acc b
@@ -388,7 +388,7 @@ chainPeerDisconnected :: MonadIO m => Peer -> Chain -> m ()
 chainPeerDisconnected p ch = ChainPeerDisconnected p `send` ch
 
 -- | Is given 'BlockHash' in the main chain?
-chainBlockMain :: MonadUnliftIO m => BlockHash -> Chain -> m Bool
+chainBlockMain :: MonadIO m => BlockHash -> Chain -> m Bool
 chainBlockMain bh ch =
     chainGetBest ch >>= \bb ->
         chainGetBlock bh ch >>= \case
