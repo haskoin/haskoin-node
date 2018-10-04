@@ -341,7 +341,7 @@ managerMessage ManagerConnect = connectNewPeers
 
 managerMessage (ManagerKill e p) = killPeer e p
 
-managerMessage (ManagerPeerDied a e) = processPeerOffline a e >> connectNewPeers
+managerMessage (ManagerPeerDied a e) = processPeerOffline a e
 
 managerMessage ManagerPurgePeers = purgePeers
 
