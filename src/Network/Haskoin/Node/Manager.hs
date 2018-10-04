@@ -365,15 +365,15 @@ managerMessage (ManagerGetOnlinePeer p reply) =
 
 managerMessage (ManagerCheckPeer p) =
     findPeer p >>= \case
-        Nothing -> return ()
-        Just OnlinePeer {..} ->
+        Just OnlinePeer {..} | onlinePeerConnected ->
             case onlinePeerPingTime of
                 Nothing -> ping_peer
                 Just time -> do
                     now <- liftIO getCurrentTime
                     if now `diffUTCTime` time > 300
                         then asks myMailbox >>= managerKill PeerTimeout p
-                        else when onlinePeerConnected ping_peer
+                        else ping_peer
+        _ -> return ()
   where
     ping_peer = do
         n <- liftIO randomIO
