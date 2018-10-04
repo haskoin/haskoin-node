@@ -40,27 +40,38 @@ data OnlinePeer = OnlinePeer
       -- ^ peer mailbox
     , onlinePeerNonce     :: !Word64
       -- ^ random nonce sent during handshake
+    , onlinePeerPingTime  :: !(Maybe UTCTime)
+      -- ^ last ping time
+    , onlinePeerPingNonce :: !(Maybe Word64)
+      -- ^ last ping nonce
     , onlinePeerPings     :: ![NominalDiffTime]
       -- ^ last few ping rountrip duration
     }
 
--- | Mailbox for a peer process.
-type Peer = Inbox Message
+-- | Peer process.
+type Peer = Mailbox Message
 
 -- | Mailbox for chain headers process.
-type Chain = Inbox ChainMessage
+type Chain = Mailbox ChainMessage
 
 -- | Mailbox for peer manager process.
-type Manager = Inbox ManagerMessage
+type Manager = Mailbox ManagerMessage
 
 -- | Node configuration. Mailboxes for manager and chain processes must be
 -- created before launching the node. The node will start those processes and
 -- receive any messages sent to those mailboxes.
+--
+-- Node events generated include:
+-- @
+-- 'ChainEvent'
+-- ('Peer', 'PeerEvent')
+-- ('Peer', 'Message')
+-- @
 data NodeConfig = NodeConfig
     { nodeConfMaxPeers :: !Int
       -- ^ maximum number of connected peers allowed
     , nodeConfDB       :: !DB
-      -- ^ RocksDB database handler
+      -- ^ database handler
     , nodeConfPeers    :: ![HostPort]
       -- ^ static list of peers to connect to
     , nodeConfDiscover :: !Bool
@@ -68,10 +79,9 @@ data NodeConfig = NodeConfig
     , nodeConfNetAddr  :: !NetworkAddress
       -- ^ network address for the local host
     , nodeConfNet      :: !Network
-     -- ^ network constants
-    , nodeConfChainPub :: !(Publisher ChainEvent)
-      -- ^ publisher for chain header events
-    , nodeConfPeerPub  :: !(Publisher (Peer, PeerEvent))
+      -- ^ network constants
+    , nodeConfEvents   :: !(Listen NodeEvent)
+      -- ^ node events sent here
     }
 
 -- | Peer manager configuration. Mailbox must be created before starting the
@@ -81,39 +91,39 @@ data ManagerConfig = ManagerConfig
       -- ^ maximum number of peers to connect to
     , mgrConfDB       :: !DB
       -- ^ RocksDB database handler to store peer information
-    , mgrConfChain    :: !Chain
-      -- ^ manager needs to be able to figure out local best block
     , mgrConfPeers    :: ![HostPort]
       -- ^ static list of peers to connect to
     , mgrConfDiscover :: !Bool
       -- ^ activate peer discovery
     , mgrConfNetAddr  :: !NetworkAddress
       -- ^ network address for the local host
-    , mgrConfMailbox  :: !Manager
-      -- ^ peer manager mailbox
     , mgrConfNetwork  :: !Network
       -- ^ network constants
-    , mgrConfPub      :: !(Publisher (Peer, PeerEvent))
-      -- ^ publisher for peer-related messages
+    , mgrConfEvents   :: !(Listen PeerEvent)
+      -- ^ send manager and peer messages to this mailbox
     }
 
 -- | Messages that can be sent to the peer manager.
 data ManagerMessage
-    = ConnectToPeers
+    = ManagerConnect
       -- ^ try to connect to peers
     | ManagerKill !PeerException
                   !Peer
       -- ^ kill this peer with supplied exception
-    | ManagerGetPeers !(Reply [OnlinePeer])
+    | ManagerGetPeers !(Listen [OnlinePeer])
       -- ^ get all connected peers
-    | ManagerGetOnlinePeer !Peer !(Reply (Maybe OnlinePeer))
+    | ManagerGetOnlinePeer !Peer !(Listen (Maybe OnlinePeer))
       -- ^ get a peer information
-    | PurgePeers
+    | ManagerPurgePeers
       -- ^ delete all known peers
-    | PeerStopped !(Async ())
-      -- ^ the peer corresponding to this async died
-    | PeerRoundTrip !Peer !NominalDiffTime
-      -- ^ roundtrip from a peer ping
+    | ManagerCheckPeer !Peer
+      -- ^ check this peer
+    | ManagerPeerMessage !Peer !Message
+      -- ^ peer got a message that is forwarded to manager
+    | ManagerPeerDied !Child !(Maybe SomeException)
+      -- ^ child died
+    | ManagerBestBlock !BlockHeight
+      -- ^ set this as our best block
 
 -- | Configuration for the chain process.
 data ChainConfig = ChainConfig
@@ -121,35 +131,36 @@ data ChainConfig = ChainConfig
       -- ^ RocksDB database handle
     , chainConfManager :: !Manager
       -- ^ peer manager mailbox
-    , chainConfMailbox :: !Chain
-      -- ^ chain process mailbox
     , chainConfNetwork :: !Network
       -- ^ network constants
-    , chainConfPub     :: !(Publisher ChainEvent)
-      -- ^ publisher for header chain events
-    , chainConfPeerPub :: !(Publisher (Peer, PeerEvent))
-      -- ^ publisher for peer events
+    , chainConfEvents  :: !(Listen ChainEvent)
+      -- ^ send header chain events here
     }
 
 -- | Messages that can be sent to the chain process.
 data ChainMessage
-    = ChainGetBest !(Reply BlockNode)
+    = ChainGetBest !(Listen BlockNode)
       -- ^ get best block known
+    | ChainHeaders !Peer ![BlockHeader]
     | ChainGetAncestor !BlockHeight
                        !BlockNode
-                       !(Reply (Maybe BlockNode))
+                       !(Listen (Maybe BlockNode))
       -- ^ get ancestor for 'BlockNode' at 'BlockHeight'
     | ChainGetSplit !BlockNode
                     !BlockNode
-                    !(Reply BlockNode)
+                    !(Listen BlockNode)
       -- ^ get highest common node
     | ChainGetBlock !BlockHash
-                    !(Reply (Maybe BlockNode))
+                    !(Listen (Maybe BlockNode))
       -- ^ get a block header
-    | ChainIsSynced !(Reply Bool)
+    | ChainIsSynced !(Listen Bool)
       -- ^ is chain in sync with network?
     | ChainPing
       -- ^ internal for housekeeping within the chain process
+    | ChainPeerConnected !Peer
+      -- ^ internal to notify that a peer has connected
+    | ChainPeerDisconnected !Peer
+      -- ^ internal to notify that a peer has disconnected
 
 -- | Events originating from chain process.
 data ChainEvent
@@ -159,16 +170,19 @@ data ChainEvent
       -- ^ chain is in sync with the network
     deriving (Eq, Show)
 
+data NodeEvent
+    = ChainEvent !ChainEvent
+    | PeerEvent !PeerEvent
+    deriving Eq
+
 -- | Configuration for a particular peer.
 data PeerConfig = PeerConfig
-    { peerConfPub     :: !(Publisher (Peer, PeerEvent))
-      -- ^ publisher for peer events
+    { peerConfListen  :: !(Listen (Peer, Message))
+      -- ^ mailbox interested in peer events
     , peerConfNetwork :: !Network
       -- ^ network constants
     , peerConfAddress :: !SockAddr
       -- ^ peer name
-    , peerConfMailbox :: !Peer
-      -- ^ mailbox for this peer
     }
 
 -- | Reasons why a peer may stop working.
@@ -205,9 +219,11 @@ instance Exception PeerException
 
 -- | Events concerning a peer.
 data PeerEvent
-    = PeerMessage !Message
-    | PeerConnected
-    | PeerDisconnected
+    = PeerConnected !Peer
+    | PeerDisconnected !Peer
+    | PeerMessage !Peer
+                  !Message
+    deriving Eq
 
 -- | Convert a host and port into a list of matching 'SockAddr'.
 toSockAddr :: MonadUnliftIO m => HostPort -> m [SockAddr]
@@ -247,25 +263,37 @@ computeTime = round <$> liftIO getPOSIXTime
 myVersion :: Word32
 myVersion = 70012
 
+managerPeerMessage :: MonadIO m => Peer -> Message -> Manager -> m ()
+managerPeerMessage p msg mgr = ManagerPeerMessage p msg `send` mgr
+
 -- | Get list of peers from manager.
-managerGetPeers :: MonadIO m => Manager -> m [OnlinePeer]
-managerGetPeers mgr = ManagerGetPeers `query` mgr
+managerGetPeers ::
+       MonadUnliftIO m => Manager -> m [OnlinePeer]
+managerGetPeers mgr = ManagerGetPeers `queryT` mgr
 
 -- | Get peer information for a peer from manager.
-managerGetPeer :: MonadIO m => Manager -> Peer -> m (Maybe OnlinePeer)
-managerGetPeer mgr p = ManagerGetOnlinePeer p `query` mgr
+managerGetPeer :: MonadUnliftIO m => Manager -> Peer -> m (Maybe OnlinePeer)
+managerGetPeer mgr p = ManagerGetOnlinePeer p `queryT` mgr
 
 -- | Ask manager to kill a peer with the provided exception.
 managerKill :: MonadIO m => PeerException -> Peer -> Manager -> m ()
 managerKill e p mgr = ManagerKill e p `send` mgr
 
+-- | Internal function used by manager to check peers periodically.
+managerCheck :: MonadIO m => Peer -> Manager -> m ()
+managerCheck p mgr = ManagerCheckPeer p `send` mgr
+
+-- | Internal function used to request manager to connect to new peers.
+managerConnect :: MonadIO m => Manager ->  m ()
+managerConnect mgr = ManagerConnect `send` mgr
+
+-- | Set the best block that the manager knows about.
+managerSetBest :: MonadIO m => BlockHeight -> Manager -> m ()
+managerSetBest bh mgr = ManagerBestBlock bh `send` mgr
+
 -- | Send a network message to peer.
 sendMessage :: MonadIO m => Message -> Peer -> m ()
 sendMessage msg p = msg `send` p
-
--- | Upload bloom filter to remote peer.
-peerSetFilter :: MonadIO m => BloomFilter -> Peer -> m ()
-peerSetFilter f p = MFilterLoad (FilterLoad f) `sendMessage` p
 
 -- | Request Merkle blocks from peer.
 getMerkleBlocks ::
@@ -321,21 +349,21 @@ buildVersion net nonce height loc rmt = do
             }
 
 -- | Get a block header from chain process.
-chainGetBlock :: MonadIO m => BlockHash -> Chain -> m (Maybe BlockNode)
-chainGetBlock bh ch = ChainGetBlock bh `query` ch
+chainGetBlock :: MonadUnliftIO m => BlockHash -> Chain -> m (Maybe BlockNode)
+chainGetBlock bh ch = ChainGetBlock bh `queryT` ch
 
 -- | Get best block header from chain process.
-chainGetBest :: MonadIO m => Chain -> m BlockNode
-chainGetBest ch = ChainGetBest `query` ch
+chainGetBest :: MonadUnliftIO m => Chain -> m BlockNode
+chainGetBest ch = ChainGetBest `queryT` ch
 
 -- | Get ancestor of 'BlockNode' at 'BlockHeight' from chain process.
 chainGetAncestor ::
-       MonadIO m => BlockHeight -> BlockNode -> Chain -> m (Maybe BlockNode)
-chainGetAncestor h n c = ChainGetAncestor h n `query` c
+       MonadUnliftIO m => BlockHeight -> BlockNode -> Chain -> m (Maybe BlockNode)
+chainGetAncestor h n c = ChainGetAncestor h n `queryT` c
 
 -- | Get parents of 'BlockNode' starting at 'BlockHeight' from chain process.
 chainGetParents ::
-       MonadIO m => BlockHeight -> BlockNode -> Chain -> m [BlockNode]
+       MonadUnliftIO m => BlockHeight -> BlockNode -> Chain -> m [BlockNode]
 chainGetParents height top ch = go [] top
   where
     go acc b
@@ -348,11 +376,19 @@ chainGetParents height top ch = go [] top
 
 -- | Get last common block from chain process.
 chainGetSplitBlock ::
-       MonadIO m => BlockNode -> BlockNode -> Chain -> m BlockNode
-chainGetSplitBlock l r c = ChainGetSplit l r `query` c
+       MonadUnliftIO m => BlockNode -> BlockNode -> Chain -> m BlockNode
+chainGetSplitBlock l r c = ChainGetSplit l r `queryT` c
+
+-- | Notify chain that a new peer is connected.
+chainPeerConnected :: MonadIO m => Peer -> Chain -> m ()
+chainPeerConnected p ch = ChainPeerConnected p `send` ch
+
+-- | Notify chain that a peer has disconnected.
+chainPeerDisconnected :: MonadIO m => Peer -> Chain -> m ()
+chainPeerDisconnected p ch = ChainPeerDisconnected p `send` ch
 
 -- | Is given 'BlockHash' in the main chain?
-chainBlockMain :: MonadIO m => BlockHash -> Chain -> m Bool
+chainBlockMain :: MonadUnliftIO m => BlockHash -> Chain -> m Bool
 chainBlockMain bh ch =
     chainGetBest ch >>= \bb ->
         chainGetBlock bh ch >>= \case
@@ -360,8 +396,11 @@ chainBlockMain bh ch =
             bm@(Just bn) -> (== bm) <$> chainGetAncestor (nodeHeight bn) bb ch
 
 -- | Is chain in sync with network?
-chainIsSynced :: MonadIO m => Chain -> m Bool
-chainIsSynced ch = ChainIsSynced `query` ch
+chainIsSynced :: MonadUnliftIO m => Chain -> m Bool
+chainIsSynced ch = ChainIsSynced `queryT` ch
+
+chainHeaders :: MonadIO m => Peer -> [BlockHeader] -> Chain -> m ()
+chainHeaders p hs ch = ChainHeaders p hs `send` ch
 
 -- | Connect via TCP.
 withConnection ::

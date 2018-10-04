@@ -13,7 +13,6 @@ module Network.Haskoin.Node.Manager
     ) where
 
 import           Conduit
-import           Control.Applicative
 import           Control.Monad
 import           Control.Monad.Except
 import           Control.Monad.Logger
@@ -58,8 +57,10 @@ type Score = Word8
 data ManagerReader = ManagerReader
     { myConfig       :: !ManagerConfig
     , mySupervisor   :: !Supervisor
+    , myMailbox      :: !Manager
     , onlinePeers    :: !(TVar (HashMap Peer OnlinePeer))
     , onlineChildren :: !(TVar (HashMap Child Peer))
+    , myBestBlock    :: !(TVar BlockHeight)
     }
 
 data PeerAddress
@@ -144,34 +145,44 @@ newPeer db sa score =
                 , insertOp (PeerScore score sa) ()
                 ]
 
+-- | Peer Manager process. In order to start it needs to receive one
+-- 'ManageBestBlock' event.
 manager ::
        (MonadUnliftIO m, MonadLoggerIO m)
     => ManagerConfig
+    -> Inbox ManagerMessage
     -> m ()
-manager cfg@ManagerConfig {..} = do
-    psup <- newInbox =<< newTQueueIO
+manager cfg@ManagerConfig {..} inbox = do
     ver :: Word32 <- fromMaybe 0 <$> retrieve mgrConfDB def PeerDataVersionKey
     when (ver < dataVersion || not mgrConfDiscover) $ purgeDB mgrConfDB
     R.insert mgrConfDB PeerDataVersionKey dataVersion
-    withAsync (liftIO $ supervisor (Notify dead) psup []) $ \a -> do
-        link a
+    withSupervisor (Notify f) $ \sup -> do
         opb <- newTVarIO H.empty
         oab <- newTVarIO H.empty
-        let w = do
-                o <- readTVar opb
-                checkSTM $ H.size o < mgrConfMaxPeers
-        withConnectLoop mgrConfMailbox w $
-            let rd =
-                    ManagerReader
-                        { myConfig = cfg
-                        , mySupervisor = psup
-                        , onlinePeers = opb
-                        , onlineChildren = oab
-                        }
-             in withPubSub Nothing mgrConfPub $ \sub ->
-                    managerLoop sub `runReaderT` rd
+        bbb <- newTVarIO 0
+        let rd =
+                ManagerReader
+                    { myConfig = cfg
+                    , mySupervisor = sup
+                    , myMailbox = mgr
+                    , onlinePeers = opb
+                    , onlineChildren = oab
+                    , myBestBlock = bbb
+                    }
+        go `runReaderT` rd
   where
-    dead x = PeerStopped (fst x) `sendSTM` mgrConfMailbox
+    mgr = inboxToMailbox inbox
+    go = do
+        connectNewPeers
+        best <-
+            receiveMatch inbox $ \case
+                ManagerBestBlock b -> Just b
+                _ -> Nothing
+        asks myBestBlock >>= \b -> atomically $ writeTVar b best
+        withConnectLoop mgr $ \a -> do
+            link a
+            forever $ receive inbox >>= managerMessage
+    f (a, mex) = ManagerPeerDied a mex `sendSTM` mgr
 
 populatePeers :: MonadManager m => m ()
 populatePeers = do
@@ -291,59 +302,91 @@ purgeDB db = purge_byte 0x81 >> purge_byte 0x83
 getConnectedPeers :: MonadManager m => m [OnlinePeer]
 getConnectedPeers = filter onlinePeerConnected <$> getOnlinePeers
 
-withConnectLoop :: MonadUnliftIO m => Manager -> STM () -> m () -> m ()
-withConnectLoop mgr w f = withAsync go $ \a -> link a >> f
-  where
-    go = do
-        let i = 250 * 1000 `div` 4
-        forever $ do
-            atomically w
-            ConnectToPeers `send` mgr
-            threadDelay =<< liftIO (randomRIO (i * 3, i * 5))
-
-managerLoop :: MonadManager m => Inbox (Peer, PeerEvent) -> m ()
-managerLoop sub = do
-    ManagerConfig {..} <- asks myConfig
-    let mgr = mgrConfMailbox
-    forever $
-        recv mgr >>= \case
-            Left event -> uncurry processEvent event
-            Right msg -> processMessage msg
-  where
-    recv mgr =
-        atomically $ Right <$> receiveSTM mgr <|> Left <$> receiveSTM sub
-
 purgePeers :: MonadManager m => m ()
 purgePeers = do
     ops <- readTVarIO =<< asks onlinePeers
     forM_ ops $ \op -> onlinePeerAsync op `cancelWith` PurgingPeer
     asks myConfig >>= purgeDB . mgrConfDB
 
-processEvent :: MonadManager m => Peer -> PeerEvent -> m ()
-processEvent p (PeerMessage (MVersion ver)) = setPeerVersion p ver
-processEvent p (PeerMessage (MAddr (Addr nats))) =
+managerMessage :: MonadManager m => ManagerMessage -> m ()
+
+managerMessage (ManagerPeerMessage p (MVersion ver)) = setPeerVersion p ver
+
+managerMessage (ManagerPeerMessage p (MAddr (Addr nats))) =
     newNetworkPeers p (map (naAddress . snd) nats)
-processEvent p (PeerMessage MVerAck) = do
+
+managerMessage (ManagerPeerMessage p MVerAck) = do
     modifyPeer p $ \s -> s {onlinePeerVerAck = True}
     announcePeer p
-processEvent _ _ = return ()
 
-processMessage :: MonadManager m => ManagerMessage -> m ()
-processMessage ConnectToPeers = connectNewPeers
-processMessage (ManagerKill e p) =
+managerMessage (ManagerPeerMessage p msg@(MPong (Pong n))) =
+    go >>= \case
+        Nothing -> fwd
+        Just t -> do
+            samplePing p t
+            modifyPeer p $ \x ->
+                x {onlinePeerPingTime = Nothing, onlinePeerPingNonce = Nothing}
+  where
+    fwd =
+        mgrConfEvents <$> asks myConfig >>= \listen ->
+            atomically . listen $ PeerMessage p msg
+    go =
+        runMaybeT $ do
+            OnlinePeer {..} <- MaybeT $ findPeer p
+            nonce <- MaybeT $ return onlinePeerPingNonce
+            guard $ nonce == n
+            time <- MaybeT $ return onlinePeerPingTime
+            now <- liftIO getCurrentTime
+            return $ now `diffUTCTime` time
+
+managerMessage (ManagerPeerMessage p (MPing (Ping n))) =
+    MPong (Pong n) `sendMessage` p
+
+managerMessage (ManagerPeerMessage p msg) =
+    mgrConfEvents <$> asks myConfig >>= \listen ->
+        atomically . listen $ PeerMessage p msg
+
+managerMessage (ManagerBestBlock h) =
+    asks myBestBlock >>= \b -> atomically $ writeTVar b h
+
+managerMessage ManagerConnect = connectNewPeers
+
+managerMessage (ManagerKill e p) =
     findPeer p >>= \case
         Nothing -> return ()
         Just op -> do
             $(logErrorS) "Manager" $
                 "Killing peer " <> cs (show (onlinePeerAddress op))
             onlinePeerAsync op `cancelWith` e
-processMessage PurgePeers = purgePeers
-processMessage (ManagerGetPeers reply) =
+
+managerMessage (ManagerPeerDied a _) = processPeerOffline a >> connectNewPeers
+
+managerMessage ManagerPurgePeers = purgePeers
+
+managerMessage (ManagerGetPeers reply) =
     getPeers >>= atomically . reply
-processMessage (ManagerGetOnlinePeer p reply) =
+
+managerMessage (ManagerGetOnlinePeer p reply) =
     getOnlinePeer p >>= atomically . reply
-processMessage (PeerStopped a) = processPeerOffline a
-processMessage (PeerRoundTrip p t) = samplePing p t
+
+managerMessage (ManagerCheckPeer p) =
+    findPeer p >>= \case
+        Nothing -> return ()
+        Just OnlinePeer {..} ->
+            case onlinePeerPingTime of
+                Nothing -> ping_peer
+                Just time -> do
+                    now <- liftIO getCurrentTime
+                    if now `diffUTCTime` time > 300
+                        then asks myMailbox >>= managerKill PeerTimeout p
+                        else ping_peer
+  where
+    ping_peer = do
+        n <- liftIO randomIO
+        now <- liftIO getCurrentTime
+        MPing (Ping n) `sendMessage` p
+        modifyPeer p $ \x ->
+            x {onlinePeerPingTime = Just now, onlinePeerPingNonce = Just n}
 
 samplePing :: MonadManager m => Peer -> NominalDiffTime -> m ()
 samplePing p n =
@@ -367,9 +410,9 @@ processPeerOffline a = do
                 then do
                     $(logWarnS) "Manager" $
                         "Disconnected peer " <> cs (show onlinePeerAddress)
-                    pub <- mgrConfPub <$> asks myConfig
+                    listen <- mgrConfEvents <$> asks myConfig
                     let p = onlinePeerMailbox
-                    Event (p, PeerDisconnected) `send` pub
+                    atomically . listen $ PeerDisconnected p
                 else $(logWarnS) "Manager" $
                      "Could not connect to peer " <> cs (show onlinePeerAddress)
             logPeersConnected
@@ -389,7 +432,7 @@ setPeerVersion p v =
                 runExceptT testVersion >>= \case
                     Left ex -> onlinePeerAsync `cancelWith` ex
                     Right () -> do
-                        MVerAck `send` p
+                        MVerAck `sendMessage` p
                         askForPeers
                         announcePeer p
   where
@@ -407,12 +450,26 @@ announcePeer p =
         Nothing -> return ()
         Just OnlinePeer {..}
             | isJust onlinePeerVersion && onlinePeerVerAck -> do
-                $(logInfoS) "Manager" $
-                    "Connected to " <> cs (show onlinePeerAddress)
-                pub <- mgrConfPub <$> asks myConfig
+                listen <- mgrConfEvents <$> asks myConfig
                 unless onlinePeerConnected $ do
-                    Event (p, PeerConnected) `send` pub
+                    $(logInfoS) "Manager" $
+                        "Connected to " <> cs (show onlinePeerAddress)
+                    atomically . listen $ PeerConnected p
                     setPeerAnnounced p
+                    getPeer onlinePeerAddress >>= \case
+                        Nothing ->
+                            $(logErrorS) "Manager" $
+                            "Could not find peer to upgrade: " <>
+                            cs (show onlinePeerAddress)
+                        Just (PeerData score timestamp) -> do
+                            db <- mgrConfDB <$> asks myConfig
+                            updatePeer
+                                db
+                                onlinePeerAddress
+                                (if score == 0
+                                     then 0
+                                     else score - 1)
+                                timestamp
             | otherwise -> return ()
 
 getPeers :: MonadManager m => m [OnlinePeer]
@@ -426,9 +483,8 @@ getOnlinePeer p = find ((== p) . onlinePeerMailbox) <$> getConnectedPeers
 connectNewPeers :: MonadManager m => m ()
 connectNewPeers = do
     ManagerConfig {..} <- asks myConfig
-    let mo = mgrConfMaxPeers
     os <- getOnlinePeers
-    when (length os < mo) $
+    when (length os < mgrConfMaxPeers) $
         getNewPeer >>= \case
             Nothing ->
                 populatePeers >> getNewPeer >>= \case
@@ -438,67 +494,34 @@ connectNewPeers = do
   where
     conn sa = do
         ManagerConfig {..} <- asks myConfig
+        mgr <- asks myMailbox
         let ad = mgrConfNetAddr
-            ch = mgrConfChain
-            pub = mgrConfPub
             net = mgrConfNetwork
-            mgr = mgrConfMailbox
         $(logInfoS) "Manager" $ "Connecting to peer " <> cs (show sa)
         nonce <- liftIO randomIO
-        bb <- nodeHeight <$> chainGetBest ch
+        bb <- asks myBestBlock >>= readTVarIO
         let rmt = NetworkAddress (srv net) sa
         ver <- buildVersion net nonce bb ad rmt
-        p <- newInbox =<< newTQueueIO
+        (inbox, p) <- newMailbox
         let pc =
                 PeerConfig
-                    { peerConfPub = pub
+                    { peerConfListen = l mgr
                     , peerConfNetwork = net
                     , peerConfAddress = sa
-                    , peerConfMailbox = p
                     }
         sup <- asks mySupervisor
-        a <- withRunInIO $ \io -> sup `addChild` (io . connectAndWatch mgr) pc
-        MVersion ver `send` p
+        a <- withRunInIO $ \io -> sup `addChild` io (launch mgr pc inbox)
+        managerCheck p mgr
+        MVersion ver `sendMessage` p
         newPeerConnection sa nonce p a
+    l mgr (p, m) = ManagerPeerMessage p m `sendSTM` mgr
     srv net
         | getSegWit net = 8
         | otherwise = 0
-
-connectAndWatch ::
-       (MonadLoggerIO m, MonadUnliftIO m)
-    => Manager
-    -> PeerConfig
-    -> m ()
-connectAndWatch mgr cfg@PeerConfig {..} =
-    withAsync peer_pinger $ \a -> do
-        link a
-        peer cfg
-  where
-    p = peerConfMailbox
-    peer_pinger =
-        withPubSub Nothing peerConfPub $ \sub -> do
-            get_connect sub
-            forever $ do
-                r <- liftIO randomIO
-                t1 <- liftIO getCurrentTime
-                MPing (Ping r) `send` peerConfMailbox
-                timeout (30 * 1000000) (get_pong sub r) >>= \case
-                    Nothing -> ManagerKill PeerTimeout p `send` mgr
-                    Just () -> do
-                        t2 <- liftIO getCurrentTime
-                        PeerRoundTrip p (t2 `diffUTCTime` t1) `send` mgr
-                        w <- liftIO $ randomRIO (30 * 1000000, 90 * 1000000)
-                        threadDelay w
-    get_connect sub =
-        receive sub >>= \case
-            (p', PeerConnected)
-                | p' == p -> return ()
-            _ -> get_connect sub
-    get_pong sub r =
-        receive sub >>= \case
-            (p', PeerMessage (MPong (Pong r')))
-                | p' == p && r' == r -> return ()
-            _ -> get_pong sub r
+    launch mgr pc inbox =
+        withPeerLoop (inboxToMailbox inbox) mgr $ \a -> do
+            link a
+            peer pc inbox
 
 newPeerConnection ::
        MonadManager m
@@ -518,6 +541,8 @@ newPeerConnection sa nonce p a =
         , onlinePeerMailbox = p
         , onlinePeerNonce = nonce
         , onlinePeerPings = []
+        , onlinePeerPingNonce = Nothing
+        , onlinePeerPingTime = Nothing
         }
 
 peerString :: MonadManager m => Peer -> m String
@@ -572,3 +597,17 @@ median ls
     | length ls `mod` 2 == 0 =
         Just . (/ 2) . sum . take 2 $ drop (length ls `div` 2 - 1) ls
     | otherwise = Just . head $ drop (length ls `div` 2) ls
+
+withPeerLoop :: MonadUnliftIO m => Peer -> Manager -> (Async a -> m a) -> m a
+withPeerLoop p mgr = withAsync go
+  where
+    go = forever $ do
+        threadDelay =<< liftIO (randomRIO (30 * 1000 * 1000, 90 * 1000 * 1000))
+        ManagerCheckPeer p `send` mgr
+
+withConnectLoop :: MonadUnliftIO m => Manager -> (Async a -> m a) -> m a
+withConnectLoop mgr = withAsync go
+  where
+    go = forever $ do
+        threadDelay =<< liftIO (randomRIO (250 * 1000, 2500 * 1000))
+        ManagerConnect `send` mgr

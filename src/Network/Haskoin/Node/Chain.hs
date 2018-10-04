@@ -14,7 +14,6 @@ module Network.Haskoin.Node.Chain
 ( chain
 ) where
 
-import           Control.Applicative
 import           Control.Monad
 import           Control.Monad.Logger
 import           Control.Monad.Reader
@@ -47,6 +46,7 @@ dataVersion = 1
 type MonadChain m
      = ( BlockHeaders m
        , MonadLoggerIO m
+       , MonadUnliftIO m
        , MonadReader ChainReader m)
 
 data ChainDataVersionKey = ChainDataVersionKey
@@ -63,6 +63,7 @@ instance Serialize ChainDataVersionKey where
 
 data ChainState = ChainState
     { syncingPeer  :: !(Maybe Peer)
+    , myMailbox    :: !Chain
     , newPeers     :: ![Peer]
     , mySynced     :: !Bool
     , lastReceived :: !UTCTime
@@ -116,38 +117,34 @@ instance (Monad m, MonadLoggerIO m, MonadReader ChainReader m) =>
       where
         f bn = insertOp (BlockHeaderKey (headerHash (nodeHeader bn))) bn
 
-chain :: (MonadUnliftIO m, MonadLoggerIO m) => ChainConfig -> m ()
-chain cfg@ChainConfig {..} = do
+chain :: (MonadUnliftIO m, MonadLoggerIO m) => ChainConfig -> Inbox ChainMessage -> m ()
+chain cfg@ChainConfig {..} inbox = do
     now <- liftIO getCurrentTime
     st <-
         newTVarIO
             ChainState
                 { syncingPeer = Nothing
                 , mySynced = False
+                , myMailbox = ch
                 , newPeers = []
                 , lastReceived = now
                 }
     let rd = ChainReader {myConfig = cfg, chainState = st}
-    run `runReaderT` rd
+    withSyncLoop ch $ run `runReaderT` rd
   where
     net = chainConfNetwork
     db = chainConfDB
-    ch = chainConfMailbox
-    ppub = chainConfPeerPub
+    ch = inboxToMailbox inbox
     run = do
         ver <- fromMaybe 1 <$> retrieve db def ChainDataVersionKey
         when (ver < dataVersion) $ purgeDB db
         insert db ChainDataVersionKey dataVersion
-        b <- retrieve db def BestBlockKey
-        when (isNothing (b :: Maybe BlockNode)) $ do
-            addBlockHeader (genesisNode net)
-            insert db BestBlockKey (genesisNode net)
-        withPubSub Nothing ppub $ \sub ->
-            withSyncLoop ch . forever $
-            recv sub >>= \case
-                Left event -> uncurry processEvent event
-                Right msg -> processMessage msg
-    recv sub = atomically $ Right <$> receiveSTM ch <|> Left <$> receiveSTM sub
+        retrieve db def BestBlockKey >>= \b ->
+            when (isNothing (b :: Maybe BlockNode)) $ do
+                addBlockHeader (genesisNode net)
+                insert db BestBlockKey (genesisNode net)
+        getBestBlockHeader >>= atomically . chainConfEvents . ChainBestBlock
+        forever $ receive inbox >>= chainMessage
 
 purgeDB :: MonadUnliftIO m => DB -> m ()
 purgeDB db = runResourceT . R.withIterator db def $ \it -> do
@@ -162,14 +159,55 @@ purgeDB db = runResourceT . R.withIterator db def $ \it -> do
                  recurse_delete it
                | otherwise -> return ()
 
-processEvent :: MonadChain m => Peer -> PeerEvent -> m ()
-processEvent p (PeerMessage (MHeaders (Headers hcs))) =
-    processHeaders p (map fst hcs)
-processEvent p PeerConnected = do
+processHeaders ::
+       MonadChain m => Peer -> [BlockHeader] -> m ()
+processHeaders p hs =
+    void . runMaybeT $ do
+        ChainConfig {..} <- asks myConfig
+        let net = chainConfNetwork
+        ChainState {..} <- readTVarIO =<< asks chainState
+        guard (syncingPeer == Just p)
+        lift setLastReceived
+        now <- computeTime
+        cur_best <- getBestBlockHeader
+        connectBlocks net now hs >>= \case
+            Right block_nodes -> conn cur_best block_nodes
+            Left e -> do
+                $(logWarnS) "Chain" $ "Could not connect headers: " <> cs e
+                pstr <- lift $ peerString p
+                $(logErrorS) "Chain" $
+                    "Syncing peer " <> pstr <> " sent bad headers"
+                managerKill PeerSentBadHeaders p chainConfManager
+  where
+    synced = do
+        asks chainState >>= \b ->
+            atomically . modifyTVar b $ \s -> s {syncingPeer = Nothing}
+        MSendHeaders `sendMessage` p
+        lift processSyncQueue
+    conn cur_best block_nodes = do
+        ChainConfig {..} <- asks myConfig
+        new_best <- getBestBlockHeader
+        when (cur_best /= new_best) $ do
+            $(logInfoS) "Chain" $
+                "New best block header at height " <>
+                cs (show (nodeHeight new_best))
+            atomically $ chainConfEvents $ ChainBestBlock new_best
+        case length hs of
+            2000 -> lift $ syncHeaders (head block_nodes) p
+            _    -> synced
+
+chainMessage :: (MonadUnliftIO m, MonadChain m) => ChainMessage -> m ()
+chainMessage (ChainGetBest reply) =
+    getBestBlockHeader >>= atomically . reply
+
+chainMessage (ChainHeaders p hs) = processHeaders p hs
+
+chainMessage (ChainPeerConnected p) = do
     asks chainState >>= \b ->
         atomically . modifyTVar b $ \s -> s {newPeers = nub $ p : newPeers s}
     processSyncQueue
-processEvent p PeerDisconnected = do
+
+chainMessage (ChainPeerDisconnected p) = do
     mp <-
         asks chainState >>= \b ->
             atomically $ do
@@ -185,65 +223,22 @@ processEvent p PeerDisconnected = do
                         }
                 return (syncingPeer s)
     when (mp == Just p) processSyncQueue
-processEvent _ _ = return ()
 
-processHeaders :: MonadChain m => Peer -> [BlockHeader] -> m ()
-processHeaders p hs =
-    void . runMaybeT $ do
-        ChainConfig {..} <- asks myConfig
-        let net = chainConfNetwork
-            mgr = chainConfManager
-        ChainState {..} <- readTVarIO =<< asks chainState
-        guard (syncingPeer == Just p)
-        setLastReceived
-        now <- computeTime
-        cur_best <- getBestBlockHeader
-        connectBlocks net now hs >>= \case
-            Right block_nodes -> conn cur_best block_nodes
-            Left e -> do
-                $(logWarnS) "Chain" $ "Could not connect headers: " <> cs e
-                pstr <- peerString p
-                $(logErrorS) "Chain" $
-                    "Syncing peer " <> pstr <> " sent bad headers"
-                managerKill PeerSentBadHeaders p mgr
-  where
-    synced = do
-        asks chainState >>= \b ->
-            atomically . modifyTVar b $ \s -> s {syncingPeer = Nothing}
-        MSendHeaders `sendMessage` p
-        processSyncQueue
-    conn cur_best block_nodes = do
-        ChainConfig {..} <- asks myConfig
-        let pub = chainConfPub
-        new_best <- getBestBlockHeader
-        when (cur_best /= new_best) $ do
-            $(logInfoS) "Chain" $
-                "New best block header at height " <>
-                cs (show (nodeHeight new_best))
-            Event (ChainBestBlock new_best) `send` pub
-        case length hs of
-            2000 -> syncHeaders (head block_nodes) p
-            _    -> synced
-
-processMessage :: MonadChain m => ChainMessage -> m ()
-processMessage (ChainGetBest reply) =
-    getBestBlockHeader >>= atomically . reply
-
-processMessage (ChainGetAncestor h n reply) =
+chainMessage (ChainGetAncestor h n reply) =
     getAncestor h n >>= atomically . reply
 
-processMessage (ChainGetSplit r l reply) =
+chainMessage (ChainGetSplit r l reply) =
     splitPoint r l >>= atomically . reply
 
-processMessage (ChainGetBlock h reply) =
+chainMessage (ChainGetBlock h reply) =
     getBlockHeader h >>= atomically . reply
 
-processMessage (ChainIsSynced reply) = do
+chainMessage (ChainIsSynced reply) = do
     st <- asks chainState
     s <- mySynced <$> readTVarIO st
     atomically (reply s)
 
-processMessage ChainPing = do
+chainMessage ChainPing = do
     ChainConfig {..} <- asks myConfig
     let mgr = chainConfManager
     b <- asks chainState
@@ -252,7 +247,7 @@ processMessage ChainPing = do
             Just p -> do
                 now <- liftIO getCurrentTime
                 when ((now `diffUTCTime` lastReceived s) > 60) $
-                    ManagerKill PeerTimeout p `send` mgr
+                    managerKill PeerTimeout p mgr
             Nothing
                 | null (newPeers s) -> do
                     ps <- map onlinePeerMailbox <$> managerGetPeers mgr
@@ -260,7 +255,7 @@ processMessage ChainPing = do
                     processSyncQueue
                 | otherwise -> return ()
 
-processSyncQueue :: MonadChain m => m ()
+processSyncQueue :: (MonadUnliftIO m, MonadChain m) => m ()
 processSyncQueue = do
     s <- asks chainState >>= readTVarIO
     when (isNothing (syncingPeer s)) $ getBestBlockHeader >>= go s
@@ -269,10 +264,10 @@ processSyncQueue = do
         case newPeers s of
             [] ->
                 unless (mySynced s) $ do
-                    pub <- chainConfPub <$> asks myConfig
+                    listen <- chainConfEvents <$> asks myConfig
                     b <- asks chainState
                     atomically $ do
-                        Event (ChainSynced bb) `sendSTM` pub
+                        listen $ ChainSynced bb
                         writeTVar b s {mySynced = True}
             p:_ -> syncHeaders bb p
 
@@ -295,7 +290,7 @@ syncHeaders bb p = do
         fromRight (error "Could not decode zero hash") . decode $
         B.replicate 32 0x00
 
-peerString :: (MonadChain m, IsString a) => Peer -> m a
+peerString :: (MonadUnliftIO m, MonadChain m, IsString a) => Peer -> m a
 peerString p = do
     mgr <- chainConfManager <$> asks myConfig
     managerGetPeer mgr p >>= \case
