@@ -48,12 +48,14 @@ inPeerConduit ::
 inPeerConduit net = do
     x <- takeCE 24 .| foldC
     case decode x of
-        Left e -> throwIO $ DecodeMessageError e
+        Left _ -> throwIO $ DecodeMessageError "failed to decode message header"
         Right (MessageHeader _ _cmd len _) -> do
             when (len > 32 * 2 ^ (20 :: Int)) . throwIO $ PayloadTooLarge len
             y <- takeCE (fromIntegral len) .| foldC
             case runGet (getMessage net) $ x `B.append` y of
-                Left e -> throwIO $ CannotDecodePayload e
+                Left _ ->
+                    throwIO $
+                    CannotDecodePayload "failed to decode message payload"
                 Right msg -> do
                     yield msg
                     inPeerConduit net
