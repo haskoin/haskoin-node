@@ -33,7 +33,7 @@ spec :: Spec
 spec = do
     let net = btcTest
     describe "peer manager on test network" $ do
-        it "connects to at a couple of peers" $
+        it "connects to a peer" $
             withTestNode net "connect-one-peer" $ \TestNode {..} -> do
                 ver <- onlinePeerVersion <$> waitForPeer testMgr nodeEvents
                 ver `shouldSatisfy` maybe False ((>= 70002) . version)
