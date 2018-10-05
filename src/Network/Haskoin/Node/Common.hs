@@ -191,9 +191,9 @@ data PeerException
       -- ^ peer was a naughty boy
     | DuplicateVersion
       -- ^ peer sent another version message
-    | DecodeMessageError !String
+    | DecodeHeaderError
       -- ^ incoming message could not be decoded
-    | CannotDecodePayload !String
+    | CannotDecodePayload
       -- ^ incoming message payload could not be decoded
     | PeerIsMyself
       -- ^ nonce for peer matches ours
