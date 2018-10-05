@@ -264,7 +264,7 @@ getNewPeer = go >>= maybe (reset_pass >> go) (return . Just)
         oas <- map onlinePeerAddress <$> getOnlinePeers
         db <- mgrConfDB <$> asks myConfig
         U.runResourceT . runConduit $
-            matching db def PeerScoreBase .| filterMC filter_not_pass .|
+            matching db def PeerScoreBase .| filterMC filter_pass .|
             mapC get_address .|
             filterC (`notElem` oas) .|
             headC
@@ -276,12 +276,15 @@ getNewPeer = go >>= maybe (reset_pass >> go) (return . Just)
         db <- mgrConfDB <$> asks myConfig
         updatePeer db addr score pass
     reset_peer_pass _ = return ()
-    filter_not_pass (PeerScore _ addr, ()) = do
+    filter_pass (PeerScore _ addr, ()) = do
         db <- mgrConfDB <$> asks myConfig
         retrieve db def (PeerAddress addr) >>= \case
-            Nothing -> return False
-            Just (PeerData _ p) -> return $ not p
-    filter_not_pass _ = return False
+            Just (PeerData score pass)
+                | not pass -> do
+                    updatePeer db addr score True
+                    return True
+            _ -> return False
+    filter_pass _ = return False
     get_address (PeerScore _ addr, ()) = addr
     get_address _ = error "Peer was eaten by a lazershark"
 
