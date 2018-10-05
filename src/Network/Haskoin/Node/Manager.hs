@@ -272,9 +272,9 @@ getNewPeer = go >>= maybe (reset_pass >> go) (return . Just)
         db <- mgrConfDB <$> asks myConfig
         U.runResourceT . runConduit $
             matching db def PeerAddressBase .| mapM_C reset_peer_pass
-    reset_peer_pass (PeerAddress addr, PeerData score pass) = do
+    reset_peer_pass (PeerAddress addr, PeerData score _) = do
         db <- mgrConfDB <$> asks myConfig
-        updatePeer db addr score pass
+        updatePeer db addr score False
     reset_peer_pass _ = return ()
     filter_pass (PeerScore _ addr, ()) = do
         db <- mgrConfDB <$> asks myConfig
