@@ -47,7 +47,7 @@ import           UnliftIO.Concurrent
 import           UnliftIO.Resource           as U
 
 dataVersion :: Word32
-dataVersion = 3
+dataVersion = 4
 
 type MonadManager m
      = (MonadLoggerIO m, MonadReader ManagerReader m)
@@ -107,30 +107,30 @@ instance Serialize PeerAddress where
         encodeSockAddr getPeerAddress
     put PeerAddressBase = S.putWord8 0x81
 
-data PeerData = PeerData !Score !Timestamp
+data PeerData = PeerData !Score !Bool
     deriving (Eq, Show, Ord)
 
 instance Serialize PeerData where
-    put (PeerData s t) = put s >> put t
+    put (PeerData s p) = put s >> put p
     get = PeerData <$> get <*> get
 
 instance Key PeerAddress
 instance KeyValue PeerAddress PeerData
 
-updatePeer :: MonadIO m => DB -> SockAddr -> Score -> Timestamp -> m ()
-updatePeer db sa score timestamp =
+updatePeer :: MonadIO m => DB -> SockAddr -> Score -> Bool -> m ()
+updatePeer db sa score pass =
     retrieve db def (PeerAddress sa) >>= \case
         Nothing ->
             writeBatch
                 db
-                [ insertOp (PeerAddress sa) (PeerData score 0)
+                [ insertOp (PeerAddress sa) (PeerData score pass)
                 , insertOp (PeerScore score sa) ()
                 ]
         Just (PeerData score' _) ->
             writeBatch
                 db
                 [ deleteOp (PeerScore score' sa)
-                , insertOp (PeerAddress sa) (PeerData score timestamp)
+                , insertOp (PeerAddress sa) (PeerData score pass)
                 , insertOp (PeerScore score sa) ()
                 ]
 
@@ -141,7 +141,7 @@ newPeer db sa score =
         Nothing ->
             writeBatch
                 db
-                [ insertOp (PeerAddress sa) (PeerData score 0)
+                [ insertOp (PeerAddress sa) (PeerData score False)
                 , insertOp (PeerScore score sa) ()
                 ]
 
@@ -244,31 +244,46 @@ logPeersConnected = do
 downgradePeer :: MonadManager m => SockAddr -> m ()
 downgradePeer sa = do
     db <- mgrConfDB <$> asks myConfig
-    now <- computeTime
     getPeer sa >>= \case
         Nothing ->
             $(logErrorS) "Manager" $
             "Could not find peer to downgrade: " <> cs (show sa)
-        Just (PeerData score _) ->
+        Just (PeerData score pass) ->
             updatePeer
                 db
                 sa
                 (if score == maxBound
                      then score
                      else score + 1)
-                now
+                pass
 
 getNewPeer :: (MonadUnliftIO m, MonadManager m) => m (Maybe SockAddr)
-getNewPeer = do
-    ManagerConfig {..} <- asks myConfig
-    oas <- map onlinePeerAddress <$> getOnlinePeers
-    let db = mgrConfDB
-    U.runResourceT . runConduit $
-        matching db def PeerScoreBase .| mapC g .| filterC (`notElem` oas) .|
-        headC
+getNewPeer = go >>= maybe (reset_pass >> go) (return . Just)
   where
-    g (PeerScore _ addr, ()) = addr
-    g _ = undefined
+    go = do
+        oas <- map onlinePeerAddress <$> getOnlinePeers
+        db <- mgrConfDB <$> asks myConfig
+        U.runResourceT . runConduit $
+            matching db def PeerScoreBase .| filterMC filter_not_pass .|
+            mapC get_address .|
+            filterC (`notElem` oas) .|
+            headC
+    reset_pass = do
+        db <- mgrConfDB <$> asks myConfig
+        U.runResourceT . runConduit $
+            matching db def PeerAddressBase .| mapM_C reset_peer_pass
+    reset_peer_pass (PeerAddress addr, PeerData score pass) = do
+        db <- mgrConfDB <$> asks myConfig
+        updatePeer db addr score pass
+    reset_peer_pass _ = return ()
+    filter_not_pass (PeerScore _ addr, ()) = do
+        db <- mgrConfDB <$> asks myConfig
+        retrieve db def (PeerAddress addr) >>= \case
+            Nothing -> return False
+            Just (PeerData _ p) -> return $ not p
+    filter_not_pass _ = return False
+    get_address (PeerScore _ addr, ()) = addr
+    get_address _ = error "Peer was eaten by a lazershark"
 
 purgeDB :: MonadUnliftIO m => DB -> m ()
 purgeDB db = purge_byte 0x81 >> purge_byte 0x83
@@ -470,7 +485,7 @@ announcePeer p =
                             $(logErrorS) "Manager" $
                             "Could not find peer to upgrade: " <>
                             cs (show onlinePeerAddress)
-                        Just (PeerData score timestamp) -> do
+                        Just (PeerData score pass) -> do
                             db <- mgrConfDB <$> asks myConfig
                             updatePeer
                                 db
@@ -478,7 +493,7 @@ announcePeer p =
                                 (if score == 0
                                      then 0
                                      else score - 1)
-                                timestamp
+                                pass
                     $(logInfoS) "Manager" $
                         "Connected to " <> cs (show onlinePeerAddress)
                     logPeersConnected

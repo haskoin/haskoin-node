@@ -11,8 +11,8 @@
 {-# LANGUAGE UndecidableInstances      #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Network.Haskoin.Node.Chain
-( chain
-) where
+    ( chain
+    ) where
 
 import           Control.Monad
 import           Control.Monad.Logger
@@ -116,7 +116,11 @@ instance (Monad m, MonadLoggerIO m, MonadReader ChainReader m) =>
       where
         f bn = insertOp (BlockHeaderKey (headerHash (nodeHeader bn))) bn
 
-chain :: (MonadUnliftIO m, MonadLoggerIO m) => ChainConfig -> Inbox ChainMessage -> m ()
+chain ::
+       (MonadUnliftIO m, MonadLoggerIO m)
+    => ChainConfig
+    -> Inbox ChainMessage
+    -> m ()
 chain cfg@ChainConfig {..} inbox = do
     now <- liftIO getCurrentTime
     st <-
@@ -165,7 +169,7 @@ processHeaders p hs =
         ChainConfig {..} <- asks myConfig
         let net = chainConfNetwork
         ChainState {..} <- readTVarIO =<< asks chainState
-        guard (syncingPeer == Just p)
+        guard (maybe True (== p) syncingPeer)
         now <- computeTime
         cur_best <- getBestBlockHeader
         connectBlocks net now hs >>= \case
