@@ -6,6 +6,8 @@ module Network.Haskoin.Node.Common where
 
 import           Conduit
 import           Data.Conduit.Network
+import           Data.Function
+import           Data.Maybe
 import           Data.String.Conversions
 import           Data.Time.Clock
 import           Data.Time.Clock.POSIX
@@ -40,13 +42,21 @@ data OnlinePeer = OnlinePeer
       -- ^ peer mailbox
     , onlinePeerNonce     :: !Word64
       -- ^ random nonce sent during handshake
-    , onlinePeerPingTime  :: !(Maybe UTCTime)
-      -- ^ last ping time
-    , onlinePeerPingNonce :: !(Maybe Word64)
-      -- ^ last ping nonce
+    , onlinePeerPing      :: !(Maybe (UTCTime, Word64))
+      -- ^ last sent ping time and nonce
     , onlinePeerPings     :: ![NominalDiffTime]
       -- ^ last few ping rountrip duration
     }
+
+instance Eq OnlinePeer where
+    (==) = (==) `on` f
+      where
+        f OnlinePeer {onlinePeerMailbox = p} = p
+
+instance Ord OnlinePeer where
+    compare = compare `on` f
+      where
+        f OnlinePeer {onlinePeerPings = pings} = fromMaybe 60 (median pings)
 
 -- | Peer process.
 type Peer = Mailbox Message
@@ -213,6 +223,8 @@ data PeerException
       -- ^ request to peer timed out
     | PurgingPeer
       -- ^ peers are being purged
+    | UnknownPeer
+      -- ^ peer is unknown
     deriving (Eq, Show)
 
 instance Exception PeerException
@@ -411,3 +423,10 @@ withConnection na f =
         Just (host, port) ->
             let cset = clientSettings port (cs host)
              in runGeneralTCPClient cset f
+
+median :: Fractional a => [a] -> Maybe a
+median ls
+    | null ls = Nothing
+    | length ls `mod` 2 == 0 =
+        Just . (/ 2) . sum . take 2 $ drop (length ls `div` 2 - 1) ls
+    | otherwise = Just . head $ drop (length ls `div` 2) ls
