@@ -1,7 +1,6 @@
 {-# LANGUAGE FlexibleContexts      #-}
 {-# LANGUAGE GADTs                 #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE RecordWildCards       #-}
 module Haskoin.Node
     ( Host
     , Port
@@ -61,25 +60,27 @@ node ::
     -> Inbox ManagerMessage
     -> Inbox ChainMessage
     -> m ()
-node NodeConfig {..} mgr_inbox ch_inbox = do
+node cfg mgr_inbox ch_inbox = do
     let mgr_config =
             ManagerConfig
-                { mgrConfMaxPeers = nodeConfMaxPeers
-                , mgrConfDB = nodeConfDB
-                , mgrConfPeers = nodeConfPeers
-                , mgrConfDiscover = nodeConfDiscover
-                , mgrConfNetAddr = nodeConfNetAddr
-                , mgrConfNetwork = nodeConfNet
+                { mgrConfMaxPeers = nodeConfMaxPeers cfg
+                , mgrConfDB = nodeConfDB cfg
+                , mgrConfPeers = nodeConfPeers cfg
+                , mgrConfDiscover = nodeConfDiscover cfg
+                , mgrConfNetAddr = nodeConfNetAddr cfg
+                , mgrConfNetwork = nodeConfNet cfg
                 , mgrConfEvents = mgr_events
+                , mgrConfTimeout = nodeConfTimeout cfg
                 }
     withAsync (manager mgr_config mgr_inbox) $ \mgr_async -> do
         link mgr_async
         let chain_config =
                 ChainConfig
-                    { chainConfDB = nodeConfDB
+                    { chainConfDB = nodeConfDB cfg
                     , chainConfManager = mgr
-                    , chainConfNetwork = nodeConfNet
+                    , chainConfNetwork = nodeConfNet cfg
                     , chainConfEvents = chain_events
+                    , chainConfTimeout = nodeConfTimeout cfg
                     }
         chain chain_config ch_inbox
   where
@@ -89,15 +90,15 @@ node NodeConfig {..} mgr_inbox ch_inbox = do
         case event of
             PeerMessage p (MHeaders (Headers hcs)) ->
                 ChainHeaders p (map fst hcs) `sendSTM` ch
-            PeerConnected p -> do
-                ChainPeerConnected p `sendSTM` ch
-                nodeConfEvents $ PeerEvent event
-            PeerDisconnected p -> do
-                ChainPeerDisconnected p `sendSTM` ch
-                nodeConfEvents $ PeerEvent event
-            _ -> nodeConfEvents $ PeerEvent event
+            PeerConnected p a -> do
+                ChainPeerConnected p a `sendSTM` ch
+                nodeConfEvents cfg $ PeerEvent event
+            PeerDisconnected p a -> do
+                ChainPeerDisconnected p a `sendSTM` ch
+                nodeConfEvents cfg $ PeerEvent event
+            _ -> nodeConfEvents cfg $ PeerEvent event
     chain_events event = do
-        nodeConfEvents $ ChainEvent event
+        nodeConfEvents cfg $ ChainEvent event
         case event of
             ChainBestBlock b -> ManagerBestBlock (nodeHeight b) `sendSTM` mgr
             _ -> return ()

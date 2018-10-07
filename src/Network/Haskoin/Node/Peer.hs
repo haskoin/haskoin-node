@@ -1,7 +1,9 @@
 {-# LANGUAGE ConstraintKinds       #-}
 {-# LANGUAGE FlexibleContexts      #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE OverloadedStrings     #-}
 {-# LANGUAGE RecordWildCards       #-}
+{-# LANGUAGE TemplateHaskell       #-}
 {-# LANGUAGE TypeFamilies          #-}
 module Network.Haskoin.Node.Peer
     ( peer
@@ -15,50 +17,69 @@ import           Data.ByteString             (ByteString)
 import qualified Data.ByteString             as B
 import           Data.Conduit.Network
 import           Data.Serialize
+import           Data.String.Conversions
+import           Data.Text                   (Text)
 import           Network.Haskoin.Constants
 import           Network.Haskoin.Network
 import           Network.Haskoin.Node.Common
+import           Network.Socket              (SockAddr)
 import           NQE
 import           UnliftIO
 
 peer :: (MonadUnliftIO m, MonadLoggerIO m) => PeerConfig -> Inbox Message -> m ()
-peer pc@PeerConfig {..} inbox =
-    withConnection peerConfAddress $ \ad -> runReaderT (peer_session ad) pc
+peer pc inbox = withConnection a $ \ad -> runReaderT (peer_session ad) pc
   where
-    go = forever $ receive inbox >>= yield
+    a = peerConfAddress pc
+    go =
+        forever $
+        receive inbox >>= \msg -> do
+            $(logDebugS) (peerString a) $
+                "Outgoing: " <> cs (commandToString (msgType msg))
+            yield msg
+    net = peerConfNetwork pc
+    p = inboxToMailbox inbox
     peer_session ad = do
         let ins = appSource ad
             ons = appSink ad
-            p = inboxToMailbox inbox
-            src =
-                runConduit $
-                ins .| inPeerConduit peerConfNetwork .| mapM_C (send_msg p)
-            snk = outPeerConduit peerConfNetwork .| ons
+            src = runConduit $ ins .| inPeerConduit net a .| mapM_C send_msg
+            snk = outPeerConduit net .| ons
         withAsync src $ \as -> do
             link as
             runConduit (go .| snk)
-    send_msg p msg = do
-        let listener = peerConfListen
-        atomically . listener $ (p, msg)
+    l = peerConfListen pc
+    send_msg msg = atomically . l $ (p, msg)
 
 inPeerConduit ::
-       MonadIO m
+       MonadLoggerIO m
     => Network
+    -> SockAddr
     -> ConduitT ByteString Message m ()
-inPeerConduit net = do
+inPeerConduit net a = do
     x <- takeCE 24 .| foldC
     case decode x of
-        Left _ -> throwIO DecodeHeaderError
+        Left _ -> do
+            $(logErrorS)
+                (peerString a)
+                "Could not decode incoming message header"
+            throwIO DecodeHeaderError
         Right (MessageHeader _ _cmd len _) -> do
-            when (len > 32 * 2 ^ (20 :: Int)) . throwIO $ PayloadTooLarge len
+            when (len > 32 * 2 ^ (20 :: Int)) $ do
+                $(logErrorS) (peerString a) "Payload too large"
+                throwIO $ PayloadTooLarge len
             y <- takeCE (fromIntegral len) .| foldC
             case runGet (getMessage net) $ x `B.append` y of
-                Left _ ->
+                Left e -> do
+                    $(logErrorS) (peerString a) $
+                        "Cannot decode payload: " <> cs (show e)
                     throwIO CannotDecodePayload
                 Right msg -> do
+                    $(logDebugS) (peerString a) $
+                        "Incoming: " <> cs (commandToString (msgType msg))
                     yield msg
-                    inPeerConduit net
+                    inPeerConduit net a
 
 outPeerConduit :: Monad m => Network -> ConduitT Message ByteString m ()
 outPeerConduit net = awaitForever $ yield . runPut . putMessage net
 
+peerString :: SockAddr -> Text
+peerString a = "Peer{" <> cs (show a) <> "}"

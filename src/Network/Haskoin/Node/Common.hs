@@ -92,6 +92,8 @@ data NodeConfig = NodeConfig
       -- ^ network constants
     , nodeConfEvents   :: !(Listen NodeEvent)
       -- ^ node events sent here
+    , nodeConfTimeout  :: !Int
+      -- ^ timeout in seconds
     }
 
 -- | Peer manager configuration. Mailbox must be created before starting the
@@ -111,6 +113,8 @@ data ManagerConfig = ManagerConfig
       -- ^ network constants
     , mgrConfEvents   :: !(Listen PeerEvent)
       -- ^ send manager and peer messages to this mailbox
+    , mgrConfTimeout  :: !Int
+      -- ^ timeout in seconds
     }
 
 -- | Messages that can be sent to the peer manager.
@@ -145,13 +149,16 @@ data ChainConfig = ChainConfig
       -- ^ network constants
     , chainConfEvents  :: !(Listen ChainEvent)
       -- ^ send header chain events here
+    , chainConfTimeout :: !Int
+      -- ^ timeout in seconds
     }
 
 -- | Messages that can be sent to the chain process.
 data ChainMessage
     = ChainGetBest !(Listen BlockNode)
       -- ^ get best block known
-    | ChainHeaders !Peer ![BlockHeader]
+    | ChainHeaders !Peer
+                   ![BlockHeader]
     | ChainGetAncestor !BlockHeight
                        !BlockNode
                        !(Listen (Maybe BlockNode))
@@ -168,8 +175,10 @@ data ChainMessage
     | ChainPing
       -- ^ internal for housekeeping within the chain process
     | ChainPeerConnected !Peer
+                         !SockAddr
       -- ^ internal to notify that a peer has connected
     | ChainPeerDisconnected !Peer
+                            !SockAddr
       -- ^ internal to notify that a peer has disconnected
 
 -- | Events originating from chain process.
@@ -232,10 +241,12 @@ instance Exception PeerException
 -- | Events concerning a peer.
 data PeerEvent
     = PeerConnected !Peer
+                    !SockAddr
     | PeerDisconnected !Peer
+                       !SockAddr
     | PeerMessage !Peer
                   !Message
-    deriving Eq
+    deriving (Eq)
 
 -- | Convert a host and port into a list of matching 'SockAddr'.
 toSockAddr :: MonadUnliftIO m => HostPort -> m [SockAddr]
@@ -392,12 +403,12 @@ chainGetSplitBlock ::
 chainGetSplitBlock l r c = ChainGetSplit l r `query` c
 
 -- | Notify chain that a new peer is connected.
-chainPeerConnected :: MonadIO m => Peer -> Chain -> m ()
-chainPeerConnected p ch = ChainPeerConnected p `send` ch
+chainPeerConnected :: MonadIO m => Peer -> SockAddr -> Chain -> m ()
+chainPeerConnected p a ch = ChainPeerConnected p a `send` ch
 
 -- | Notify chain that a peer has disconnected.
-chainPeerDisconnected :: MonadIO m => Peer -> Chain -> m ()
-chainPeerDisconnected p ch = ChainPeerDisconnected p `send` ch
+chainPeerDisconnected :: MonadIO m => Peer -> SockAddr -> Chain -> m ()
+chainPeerDisconnected p a ch = ChainPeerDisconnected p a `send` ch
 
 -- | Is given 'BlockHash' in the main chain?
 chainBlockMain :: MonadIO m => BlockHash -> Chain -> m Bool

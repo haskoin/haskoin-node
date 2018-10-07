@@ -10,10 +10,7 @@ module Haskoin.NodeSpec
 import           Control.Monad
 import           Control.Monad.Logger
 import           Control.Monad.Trans
-import qualified Data.ByteString      as BS
-import           Data.Either
 import           Data.Maybe
-import           Data.Serialize
 import qualified Database.RocksDB     as R
 import           Haskoin
 import           Haskoin.Node
@@ -44,20 +41,23 @@ spec = do
                         "000000000babf10e26f6cba54d9c282983f1d1ce7061f7e875b58f8ca47db932"
                     h2 =
                         "00000000851f278a8b2c466717184aae859af5b83c6f850666afbc349cf61577"
-                let get_blocks =
+                let get_blocks 0 = throwString "Tried too many times"
+                    get_blocks n =
                         waitForPeer testMgr nodeEvents >>= \op -> do
                             let p = onlinePeerMailbox op
                             peerGetBlocks net p hs
                             bs <-
                                 fmap catMaybes .
-                                replicateM 2 . receiveMatchS 30 nodeEvents $ \case
+                                replicateM 2 . receiveMatchS 2 nodeEvents $ \case
                                     PeerEvent (PeerMessage p' (MBlock b))
                                         | p == p' -> Just b
                                     _ -> Nothing
                             case length bs of
                                 2 -> return bs
-                                _ -> get_blocks
-                [b1, b2] <- get_blocks
+                                _ -> do
+                                    managerKill PeerTimeout p testMgr
+                                    get_blocks (n - 1)
+                [b1, b2] <- get_blocks (30 :: Int)
                 headerHash (blockHeader b1) `shouldSatisfy` (`elem` hs)
                 headerHash (blockHeader b2) `shouldSatisfy` (`elem` hs)
                 let testMerkle b =
@@ -71,33 +71,33 @@ spec = do
         it "attempts to get inexistent things" $
             withTestNode net "download-fail" $ \TestNode {..} -> do
                 let h =
-                        TxHash .
-                        fromRight (error "We will, we will rock you!") . decode $
-                        BS.replicate 32 0xaa
-                let get_tx = do
+                        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    get_tx 0 = throwString "Tried too many times"
+                    get_tx x = do
                         p <-
                             onlinePeerMailbox <$> waitForPeer testMgr nodeEvents
                         peerGetTxs net p [h]
                         r <- liftIO randomIO
                         MPing (Ping r) `send` p
                         m <-
-                            timeout (5 * 1000 * 1000) $
-                            receiveMatch nodeEvents $ \case
+                            receiveMatchS 2 nodeEvents $ \case
                                 PeerEvent (PeerMessage p' (MNotFound (NotFound (InvVector _ h':_))))
                                     | p == p' -> Just (Right h')
                                 PeerEvent (PeerMessage p' (MPong (Pong r')))
                                     | p == p' -> Just (Left r')
                                 _ -> Nothing
                         case m of
-                            Nothing ->
-                                throwString "Timeout getting inexistent tx"
-                            Just (Right n) -> return n
+                            Nothing -> do
+                                managerKill PeerTimeout p testMgr
+                                get_tx (x - 1)
+                            Just (Right n) -> return (Just n)
                             Just (Left r') ->
                                 if r == r'
-                                    then get_tx
-                                    else throwString
-                                             "Wrong pong after inexistent tx request"
-                get_tx `shouldReturn` getTxHash h
+                                    then return Nothing
+                                    else get_tx (x - 1)
+                get_tx (30 :: Int) >>= \case
+                    Nothing -> return ()
+                    Just h' -> h' `shouldBe` getTxHash h
     describe "chain on test network" $ do
         it "syncs some headers" $
             withTestNode net "connect-sync" $ \TestNode {..} -> do
@@ -139,15 +139,18 @@ spec = do
                     headerHash (nodeHeader p) `shouldBe` h
 
 waitForPeer :: MonadIO m => Manager -> Inbox NodeEvent -> m OnlinePeer
-waitForPeer mgr mailbox = do
-    p <-
-        receiveMatch mailbox $ \case
-            PeerEvent (PeerConnected p) -> return p
-            _ -> Nothing
-    managerGetPeer p mgr >>= \case
-        Just op -> return op
-        Nothing ->
-            throwString "Got a peer connected event but could not get peer data"
+waitForPeer mgr mailbox =
+    managerGetPeers mgr >>= \case
+        [] -> do
+            p <-
+                receiveMatch mailbox $ \case
+                    PeerEvent (PeerConnected p _) -> Just p
+                    _ -> Nothing
+            managerGetPeer p mgr >>= \case
+                Nothing -> waitForPeer mgr mailbox
+                Just op -> return op
+        op:_ -> return op
+
 
 withTestNode ::
        MonadUnliftIO m
@@ -156,8 +159,7 @@ withTestNode ::
     -> (TestNode -> m a)
     -> m a
 withTestNode net str f =
-    runStderrLoggingT .
-    withSystemTempDirectory ("haskoin-node-test-" <> str <> "-") $ \w -> do
+    runNoLoggingT . withSystemTempDirectory ("haskoin-node-test-" <> str <> "-") $ \w -> do
         node_inbox <- newInbox
         db <-
             R.open
@@ -175,6 +177,7 @@ withTestNode net str f =
                     , nodeConfNetAddr = NetworkAddress 0 (SockAddrInet 0 0)
                     , nodeConfNet = net
                     , nodeConfEvents = (`sendSTM` node_inbox)
+                    , nodeConfTimeout = 2
                     }
         withNode cfg $ \(mgr, ch) ->
             lift $

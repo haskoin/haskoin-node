@@ -4,8 +4,6 @@
 {-# LANGUAGE LambdaCase            #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings     #-}
-{-# LANGUAGE RecordWildCards       #-}
-{-# LANGUAGE ScopedTypeVariables   #-}
 {-# LANGUAGE TupleSections         #-}
 module Network.Haskoin.Node.Manager.Logic where
 
@@ -77,9 +75,9 @@ instance Serialize PeerAddress where
     get = do
         guard . (== 0x81) =<< S.getWord8
         PeerAddress <$> decodeSockAddr
-    put PeerAddress {..} = do
+    put PeerAddress {getPeerAddress = a} = do
         S.putWord8 0x81
-        encodeSockAddr getPeerAddress
+        encodeSockAddr a
     put PeerAddressBase = S.putWord8 0x81
 
 data PeerData = PeerData !Score !Bool
@@ -122,7 +120,7 @@ newPeerDB db score sa =
 
 initPeerDB :: MonadUnliftIO m => DB -> Bool -> m ()
 initPeerDB db discover = do
-    ver :: Word32 <- fromMaybe 0 <$> retrieve db def PeerDataVersionKey
+    ver <- fromMaybe 0 <$> retrieve db def PeerDataVersionKey
     when (ver < versionPeerDB || not discover) $ purgePeerDB db
     R.insert db PeerDataVersionKey versionPeerDB
 

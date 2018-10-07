@@ -4,8 +4,6 @@
 {-# LANGUAGE LambdaCase            #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings     #-}
-{-# LANGUAGE RecordWildCards       #-}
-{-# LANGUAGE ScopedTypeVariables   #-}
 {-# LANGUAGE TemplateHaskell       #-}
 {-# LANGUAGE TupleSections         #-}
 module Network.Haskoin.Node.Manager
@@ -69,7 +67,7 @@ manager cfg inbox =
     discover = mgrConfDiscover cfg
     go = do
         db <- getManagerDB
-        $(logDebugS) "Manager" "Initializing ..."
+        $(logDebugS) "Manager" "Initializing..."
         initPeerDB db discover
         putBestBlock <=< receiveMatch inbox $ \case
             ManagerBestBlock b -> Just b
@@ -102,8 +100,8 @@ populatePeerDB = do
         net_seeds <- concat <$> mapM toSockAddr (networkSeeds net)
         forM_ net_seeds $ newPeerDB db netSeedScore
 
-logPeersConnected :: MonadManager m => m ()
-logPeersConnected = do
+logConnectedPeers :: MonadManager m => m ()
+logConnectedPeers = do
     m <- mgrConfMaxPeers <$> asks myConfig
     l <- length <$> getConnectedPeers
     $(logInfoS) "Manager" $
@@ -208,13 +206,10 @@ managerMessage (ManagerPeerDied a e) = processPeerOffline a e
 managerMessage ManagerPurgePeers = do
     $(logWarnS) "Manager" "Purging connected peers and peer database"
     purgePeers
-managerMessage (ManagerGetPeers reply) = do
-    $(logDebugS) "Manager" "Responding to request for connected peers"
+managerMessage (ManagerGetPeers reply) =
     getConnectedPeers >>= atomically . reply
 managerMessage (ManagerGetOnlinePeer p reply) = do
     b <- asks onlinePeers
-    s <- atomically $ peerString b p
-    $(logDebugS) "Manager" $ "Responding to request for online peer " <> s
     atomically $ findPeer b p >>= reply
 managerMessage (ManagerCheckPeer p) = do
     b <- asks onlinePeers
@@ -224,6 +219,7 @@ managerMessage (ManagerCheckPeer p) = do
 
 checkPeer :: MonadManager m => Peer -> m ()
 checkPeer p = do
+    ManagerConfig {mgrConfTimeout = to} <- asks myConfig
     b <- asks onlinePeers
     s <- atomically $ peerString b p
     atomically (lastPing b p) >>= \case
@@ -232,7 +228,7 @@ checkPeer p = do
             pingPeer p
         Just t -> do
             now <- liftIO getCurrentTime
-            if diffUTCTime now t > 30
+            if diffUTCTime now t > fromIntegral to
                 then do
                     $(logErrorS) "Manager" $
                         "Peer " <> s <> " did not respond ping on time"
@@ -272,16 +268,17 @@ processPeerOffline a e = do
         Nothing -> log_unknown e
         Just o -> do
             let p = onlinePeerMailbox o
+                d = onlinePeerAddress o
             s <- atomically $ peerString b p
             if onlinePeerConnected o
                 then do
                     log_disconnected s e
-                    managerEvent $ PeerDisconnected p
+                    managerEvent $ PeerDisconnected p d
                 else log_not_connect s e
             atomically $ removePeer b p
             db <- getManagerDB
             demotePeerDB db (onlinePeerAddress o)
-            logPeersConnected
+            logConnectedPeers
   where
     log_unknown Nothing = $(logErrorS) "Manager" "Disconnected unknown peer"
     log_unknown (Just x) =
@@ -300,10 +297,13 @@ announcePeer :: MonadManager m => Peer -> m ()
 announcePeer p = do
     b <- asks onlinePeers
     s <- atomically $ peerString b p
+    mgr <- asks myMailbox
     atomically (findPeer b p) >>= \case
         Just OnlinePeer {onlinePeerAddress = a, onlinePeerConnected = True} -> do
             $(logInfoS) "Manager" $ "Handshake completed for peer " <> s
-            managerEvent $ PeerConnected p
+            managerEvent $ PeerConnected p a
+            logConnectedPeers
+            managerCheck p mgr
             db <- getManagerDB
             promotePeerDB db a
         Just OnlinePeer {onlinePeerConnected = False} ->
@@ -345,7 +345,6 @@ connectPeer sa = do
                 , peerConfAddress = sa
                 }
     a <- withRunInIO $ \io -> sup `addChild` io (launch mgr pc inbox p)
-    managerCheck p mgr
     MVersion ver `sendMessage` p
     b <- asks onlinePeers
     _ <- atomically $ newOnlinePeer b sa nonce p a
@@ -372,4 +371,4 @@ withConnectLoop mgr = withAsync go
   where
     go = forever $ do
         ManagerConnect `send` mgr
-        threadDelay =<< liftIO (randomRIO (5 * 1000 * 1000, 10 * 1000 * 1000))
+        threadDelay =<< liftIO (randomRIO (250 * 1000, 1000 * 1000))

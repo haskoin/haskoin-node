@@ -221,13 +221,9 @@ finishPeer p =
                           else syncingPeer s
                 }
 
-timeoutPeer :: (MonadChainLogic a p m, MonadIO m) => m (Maybe p)
-timeoutPeer =
-    asks chainState >>= readTVarIO >>= \s -> do
-        let t1 = lastReceived s
-        t2 <- liftIO getCurrentTime
-        let d = diffUTCTime t2 t1
+lastMessage :: (MonadChainLogic a p m, MonadIO m) => m (Maybe (p, UTCTime))
+lastMessage =
+    asks chainState >>= readTVarIO >>= \s ->
         case syncingPeer s of
-            Just p
-                | d > 60 -> return $ Just p
-            _ -> return Nothing
+            Just p -> return $ Just (p, lastReceived s)
+            Nothing -> return Nothing
