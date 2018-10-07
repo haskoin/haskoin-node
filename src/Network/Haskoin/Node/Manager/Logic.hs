@@ -11,7 +11,7 @@ module Network.Haskoin.Node.Manager.Logic where
 
 import           Conduit
 import           Control.Monad
-import           Control.Monad.Trans.Except
+import           Control.Monad.Except
 import           Control.Monad.Trans.Maybe
 import           Data.Bits
 import qualified Data.ByteString             as B
@@ -240,9 +240,14 @@ getNewPeerDB db exclude = go >>= maybe (reset_pass >> go) (return . Just)
     get_address (PeerScore _ addr, ()) = addr
     get_address _ = error "Something is wrong with peer database"
 
-gotPong :: TVar [OnlinePeer] -> Word64 -> UTCTime -> Peer -> STM Bool
+gotPong ::
+       TVar [OnlinePeer]
+    -> Word64
+    -> UTCTime
+    -> Peer
+    -> STM (Maybe NominalDiffTime)
 gotPong b nonce now p =
-    fmap isJust . runMaybeT $ do
+    runMaybeT $ do
         o <- MaybeT $ findPeer b p
         (time, old_nonce) <- MaybeT . return $ onlinePeerPing o
         guard $ nonce == old_nonce
@@ -254,6 +259,7 @@ gotPong b nonce now p =
                     { onlinePeerPing = Nothing
                     , onlinePeerPings = take 11 $ diff : onlinePeerPings o
                     }
+        return diff
 
 lastPing :: TVar [OnlinePeer] -> Peer -> STM (Maybe UTCTime)
 lastPing b p =
@@ -272,11 +278,12 @@ setPeerVersion ::
     -> STM (Either PeerException OnlinePeer)
 setPeerVersion b p v =
     runExceptT $ do
-        when (services v .&. nodeNetwork == 0) $ throwE NotNetworkPeer
+        when (services v .&. nodeNetwork == 0) $ throwError NotNetworkPeer
         ops <- lift $ readTVar b
-        when (any ((verNonce v ==) . onlinePeerNonce) ops) $ throwE PeerIsMyself
+        when (any ((verNonce v ==) . onlinePeerNonce) ops) $
+            throwError PeerIsMyself
         lift (findPeer b p) >>= \case
-            Nothing -> throwE UnknownPeer
+            Nothing -> throwError UnknownPeer
             Just o -> do
                 let n =
                         o

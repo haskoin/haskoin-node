@@ -69,14 +69,12 @@ manager cfg inbox =
     discover = mgrConfDiscover cfg
     go = do
         db <- getManagerDB
+        $(logDebugS) "Manager" "Initializing ..."
         initPeerDB db discover
-        getNewPeer >>= \case
-            Nothing -> return ()
-            Just a -> connectPeer a
         putBestBlock <=< receiveMatch inbox $ \case
             ManagerBestBlock b -> Just b
             _ -> Nothing
-        $(logInfoS) "Manager" "Initialization complete"
+        $(logDebugS) "Manager" "Initialization complete"
         withConnectLoop mgr $ \a -> do
             link a
             forever $ receive inbox >>= managerMessage
@@ -135,27 +133,68 @@ managerEvent :: MonadManager m => PeerEvent -> m ()
 managerEvent e = mgrConfEvents <$> asks myConfig >>= \l -> atomically $ l e
 
 managerMessage :: (MonadUnliftIO m, MonadManager m) => ManagerMessage -> m ()
-managerMessage (ManagerPeerMessage p (MVersion v)) =
-    either (`killPeer` p) (\_ -> return ()) <=< runExceptT $ do
-        b <- asks onlinePeers
-        o <- ExceptT . atomically $ setPeerVersion b p v
-        when (onlinePeerConnected o) $ announcePeer p
+managerMessage (ManagerPeerMessage p (MVersion v)) = do
+    b <- asks onlinePeers
+    s <- atomically $ peerString b p
+    e <-
+        runExceptT $ do
+            let ua = getVarString $ userAgent v
+            $(logDebugS) "Manager" $
+                "Got version from peer " <> s <> ": " <> cs ua
+            o <- ExceptT . atomically $ setPeerVersion b p v
+            when (onlinePeerConnected o) $ announcePeer p
+    case e of
+        Right () -> $(logDebugS) "Manager" $ "Version accepted for peer " <> s
+        Left x -> do
+            $(logErrorS) "Manager" $
+                "Version rejected for peer " <> s <> ": " <> cs (show x)
+            killPeer x p
 managerMessage (ManagerPeerMessage p MVerAck) = do
     b <- asks onlinePeers
+    s <- atomically $ peerString b p
     atomically (setPeerVerAck b p) >>= \case
-        Just o -> when (onlinePeerConnected o) $ announcePeer p
-        Nothing -> killPeer UnknownPeer p
-managerMessage (ManagerPeerMessage _ (MAddr (Addr nas))) = do
+        Just o -> do
+            $(logDebugS) "Manager" $ "Received verack from peer: " <> s
+            when (onlinePeerConnected o) $ announcePeer p
+        Nothing -> do
+            $(logErrorS) "Manager" $ "Received verack from unknown peer: " <> s
+            killPeer UnknownPeer p
+managerMessage (ManagerPeerMessage p (MAddr (Addr nas))) = do
     db <- getManagerDB
+    b <- asks onlinePeers
+    s <- atomically $ peerString b p
+    $(logInfoS) "Manager" $
+        "Received " <> cs (show (length nas)) <> " peers from " <> s
     let sas = map (naAddress . snd) nas
     forM_ sas $ newPeerDB db netPeerScore
 managerMessage (ManagerPeerMessage p msg@(MPong (Pong n))) = do
     now <- liftIO getCurrentTime
     b <- asks onlinePeers
-    atomically (gotPong b n now p) >>= \x -> unless x $ forwardMessage p msg
-managerMessage (ManagerPeerMessage p (MPing (Ping n))) =
+    s <- atomically $ peerString b p
+    atomically (gotPong b n now p) >>= \case
+        Nothing -> do
+            $(logDebugS) "Manager" $
+                "Forwarding pong " <> cs (show n) <> " from " <> s
+            forwardMessage p msg
+        Just d -> do
+            let ms = d * 1000
+            $(logDebugS) "Manager" $
+                "Ping " <> cs (show n) <> " to " <> s <> " took " <>
+                cs (show ms) <>
+                " milliseconds"
+managerMessage (ManagerPeerMessage p (MPing (Ping n))) = do
+    b <- asks onlinePeers
+    s <- atomically $ peerString b p
+    $(logDebugS) "Manager" $
+        "Responding to ping " <> cs (show n) <> " from " <> s
     MPong (Pong n) `sendMessage` p
-managerMessage (ManagerPeerMessage p msg) = forwardMessage p msg
+managerMessage (ManagerPeerMessage p msg) = do
+    b <- asks onlinePeers
+    s <- atomically $ peerString b p
+    let cmd = commandToString $ msgType msg
+    $(logDebugS) "Manager" $
+        "Forwarding message " <> cs cmd <> " from peer " <> s
+    forwardMessage p msg
 managerMessage (ManagerBestBlock h) = putBestBlock h
 managerMessage ManagerConnect = do
     l <- length <$> getConnectedPeers
@@ -166,30 +205,57 @@ managerMessage ManagerConnect = do
             Just sa -> connectPeer sa
 managerMessage (ManagerKill e p) = killPeer e p
 managerMessage (ManagerPeerDied a e) = processPeerOffline a e
-managerMessage ManagerPurgePeers = purgePeers
-managerMessage (ManagerGetPeers reply) =
+managerMessage ManagerPurgePeers = do
+    $(logWarnS) "Manager" "Purging connected peers and peer database"
+    purgePeers
+managerMessage (ManagerGetPeers reply) = do
+    $(logDebugS) "Manager" "Responding to request for connected peers"
     getConnectedPeers >>= atomically . reply
 managerMessage (ManagerGetOnlinePeer p reply) = do
     b <- asks onlinePeers
+    s <- atomically $ peerString b p
+    $(logDebugS) "Manager" $ "Responding to request for online peer " <> s
     atomically $ findPeer b p >>= reply
-managerMessage (ManagerCheckPeer p) = checkPeer p
+managerMessage (ManagerCheckPeer p) = do
+    b <- asks onlinePeers
+    s <- atomically $ peerString b p
+    $(logDebugS) "Manager" $ "Checking on peer " <> s
+    checkPeer p
 
 checkPeer :: MonadManager m => Peer -> m ()
 checkPeer p = do
     b <- asks onlinePeers
+    s <- atomically $ peerString b p
     atomically (lastPing b p) >>= \case
-        Nothing -> pingPeer p
+        Nothing -> do
+            $(logDebugS) "Manager" $ "Peer " <> s <> " will be pinged"
+            pingPeer p
         Just t -> do
             now <- liftIO getCurrentTime
-            when (diffUTCTime now t > 30) $ killPeer PeerTimeout p
+            if diffUTCTime now t > 30
+                then do
+                    $(logErrorS) "Manager" $
+                        "Peer " <> s <> " did not respond ping on time"
+                    killPeer PeerTimeout p
+                else $(logDebugS) "Manager" $ "peer " <> s <> " awaiting pong"
 
 pingPeer :: MonadManager m => Peer -> m ()
 pingPeer p = do
-    n <- liftIO randomIO
-    now <- liftIO getCurrentTime
     b <- asks onlinePeers
-    atomically (setPeerPing b n now p)
-    MPing (Ping n) `sendMessage` p
+    s <- atomically $ peerString b p
+    atomically (findPeer b p) >>= \case
+        Nothing -> $(logErrorS) "Manager" $ "Will not ping unknown peer " <> s
+        Just o
+            | onlinePeerConnected o -> do
+                n <- liftIO randomIO
+                now <- liftIO getCurrentTime
+                atomically (setPeerPing b n now p)
+                $(logDebugS) "Manager" $
+                    "Sending ping " <> cs (show n) <> " to peer " <> s
+                MPing (Ping n) `sendMessage` p
+            | otherwise ->
+                $(logWarnS) "Manager" $
+                "Will not ping peer " <> s <> " until handshake complete"
 
 killPeer :: MonadManager m => PeerException -> Peer -> m ()
 killPeer e p = void . runMaybeT $ do
@@ -233,21 +299,33 @@ processPeerOffline a e = do
 announcePeer :: MonadManager m => Peer -> m ()
 announcePeer p = do
     b <- asks onlinePeers
+    s <- atomically $ peerString b p
     atomically (findPeer b p) >>= \case
         Just OnlinePeer {onlinePeerAddress = a, onlinePeerConnected = True} -> do
+            $(logInfoS) "Manager" $ "Handshake completed for peer " <> s
             managerEvent $ PeerConnected p
             db <- getManagerDB
             promotePeerDB db a
-        _ -> return ()
+        Just OnlinePeer {onlinePeerConnected = False} ->
+            $(logErrorS) "Manager" $
+            "Not announcing because not handshaken: " <> s
+        Nothing -> $(logErrorS) "Manager" "Will not announce unknown peer"
 
 getNewPeer :: (MonadUnliftIO m, MonadManager m) => m (Maybe SockAddr)
 getNewPeer = do
     ManagerConfig {mgrConfDB = db} <- asks myConfig
-    online_peers <- getOnlinePeers
-    let exclude = map onlinePeerAddress online_peers
-    runMaybeT $
+    exclude <- map onlinePeerAddress <$> getOnlinePeers
+    m <-
+        runMaybeT $
         MaybeT (getNewPeerDB db exclude) <|>
         MaybeT (populatePeerDB >> getNewPeerDB db exclude)
+    case m of
+        Just a -> do
+            $(logDebugS) "Manager" $ "Got peer to connect: " <> cs (show a)
+            return $ Just a
+        Nothing -> do
+            $(logWarnS) "Manager" "Could not get a peer to connect"
+            return Nothing
 
 connectPeer :: (MonadUnliftIO m, MonadManager m) => SockAddr -> m ()
 connectPeer sa = do
@@ -293,5 +371,5 @@ withConnectLoop :: MonadUnliftIO m => Manager -> (Async a -> m a) -> m a
 withConnectLoop mgr = withAsync go
   where
     go = forever $ do
-        threadDelay =<< liftIO (randomRIO (5 * 1000 * 1000, 10 * 1000 * 1000))
         ManagerConnect `send` mgr
+        threadDelay =<< liftIO (randomRIO (5 * 1000 * 1000, 10 * 1000 * 1000))

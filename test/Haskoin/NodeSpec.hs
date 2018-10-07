@@ -156,7 +156,8 @@ withTestNode ::
     -> (TestNode -> m a)
     -> m a
 withTestNode net str f =
-    runNoLoggingT . withSystemTempDirectory ("haskoin-node-test-" <> str <> "-") $ \w -> do
+    runStderrLoggingT .
+    withSystemTempDirectory ("haskoin-node-test-" <> str <> "-") $ \w -> do
         node_inbox <- newInbox
         db <-
             R.open
