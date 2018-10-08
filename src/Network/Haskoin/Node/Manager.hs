@@ -314,12 +314,8 @@ getNewPeer = do
         MaybeT (getNewPeerDB db exclude) <|>
         MaybeT (populatePeerDB >> getNewPeerDB db exclude)
     case m of
-        Just a -> do
-            $(logDebugS) "Manager" $ "Got peer to connect: " <> cs (show a)
-            return $ Just a
-        Nothing -> do
-            $(logWarnS) "Manager" "Could not get a peer to connect"
-            return Nothing
+        Just a -> return $ Just a
+        Nothing -> return Nothing
 
 connectPeer :: (MonadUnliftIO m, MonadManager m) => SockAddr -> m ()
 connectPeer sa = do
