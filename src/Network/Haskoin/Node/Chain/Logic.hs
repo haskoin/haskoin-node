@@ -226,8 +226,4 @@ finishPeer p =
                 }
 
 lastMessage :: (MonadChainLogic a p m, MonadIO m) => m (Maybe (p, UTCTime))
-lastMessage =
-    asks chainState >>= readTVarIO >>= \s ->
-        case syncingPeer s of
-            Just pt  -> return $ Just pt
-            Nothing -> return Nothing
+lastMessage = syncingPeer <$> (readTVarIO =<< asks chainState)
