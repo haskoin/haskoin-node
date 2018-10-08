@@ -142,7 +142,9 @@ managerMessage (ManagerPeerMessage p (MVersion v)) = do
             o <- ExceptT . atomically $ setPeerVersion b p v
             when (onlinePeerConnected o) $ announcePeer p
     case e of
-        Right () -> $(logDebugS) "Manager" $ "Version accepted for peer " <> s
+        Right () -> do
+            $(logDebugS) "Manager" $ "Version accepted for peer " <> s
+            MVerAck `sendMessage` p
         Left x -> do
             $(logErrorS) "Manager" $
                 "Version rejected for peer " <> s <> ": " <> cs (show x)
