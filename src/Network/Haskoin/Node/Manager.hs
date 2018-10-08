@@ -199,7 +199,7 @@ managerMessage ManagerConnect = do
     x <- mgrConfMaxPeers <$> asks myConfig
     when (l < x) $
         getNewPeer >>= \case
-            Nothing -> $(logErrorS) "Manager" "No candidate peers to connect"
+            Nothing -> return ()
             Just sa -> connectPeer sa
 managerMessage (ManagerKill e p) = killPeer e p
 managerMessage (ManagerPeerDied a e) = processPeerOffline a e
@@ -211,11 +211,7 @@ managerMessage (ManagerGetPeers reply) =
 managerMessage (ManagerGetOnlinePeer p reply) = do
     b <- asks onlinePeers
     atomically $ findPeer b p >>= reply
-managerMessage (ManagerCheckPeer p) = do
-    b <- asks onlinePeers
-    s <- atomically $ peerString b p
-    $(logDebugS) "Manager" $ "Checking on peer " <> s
-    checkPeer p
+managerMessage (ManagerCheckPeer p) = checkPeer p
 
 checkPeer :: MonadManager m => Peer -> m ()
 checkPeer p = do
@@ -223,9 +219,7 @@ checkPeer p = do
     b <- asks onlinePeers
     s <- atomically $ peerString b p
     atomically (lastPing b p) >>= \case
-        Nothing -> do
-            $(logDebugS) "Manager" $ "Peer " <> s <> " will be pinged"
-            pingPeer p
+        Nothing -> pingPeer p
         Just t -> do
             now <- liftIO getCurrentTime
             if diffUTCTime now t > fromIntegral to
