@@ -35,14 +35,12 @@ chain ::
     -> Inbox ChainMessage
     -> m ()
 chain cfg inbox = do
-    now <- liftIO getCurrentTime
     st <-
         newTVarIO
             ChainState
                 { syncingPeer = Nothing
                 , mySynced = False
                 , newPeers = []
-                , lastReceived = now
                 }
     let rd = ChainReader {myReader = cfg, myChainDB = db, chainState = st}
     withSyncLoop ch $ run `runReaderT` rd

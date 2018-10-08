@@ -9,6 +9,7 @@
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Network.Haskoin.Node.Chain.Logic where
 
+import           Control.Arrow
 import           Control.Monad
 import           Control.Monad.Except
 import           Control.Monad.Logger
@@ -44,10 +45,9 @@ instance Serialize ChainDataVersionKey where
     put ChainDataVersionKey = S.putWord8 0x92
 
 data ChainState p = ChainState
-    { syncingPeer  :: !(Maybe p)
-    , newPeers     :: ![p]
-    , mySynced     :: !Bool
-    , lastReceived :: !UTCTime
+    { syncingPeer :: !(Maybe (p, UTCTime))
+    , newPeers    :: ![p]
+    , mySynced    :: !Bool
     }
 
 newtype BlockHeaderKey = BlockHeaderKey BlockHash deriving (Eq, Show)
@@ -171,8 +171,9 @@ syncHeaders ::
     -> m GetHeaders
 syncHeaders bb p = do
     st <- asks chainState
+    now <- liftIO getCurrentTime
     atomically . modifyTVar st $ \s ->
-        s {syncingPeer = Just p, newPeers = delete p (newPeers s)}
+        s {syncingPeer = Just (p, now), newPeers = delete p (newPeers s)}
     loc <- blockLocator bb
     return
         GetHeaders
@@ -186,7 +187,8 @@ setLastReceived :: (MonadChainLogic a p m, MonadIO m) => m ()
 setLastReceived = do
     st <- asks chainState
     now <- liftIO getCurrentTime
-    atomically . modifyTVar st $ \s -> s {lastReceived = now}
+    atomically . modifyTVar st $ \s ->
+        s {syncingPeer = second (const now) <$> syncingPeer s}
 
 addPeer :: (Eq p, MonadIO m, MonadChainLogic a p m) => p -> m ()
 addPeer p = do
@@ -194,12 +196,13 @@ addPeer p = do
     atomically . modifyTVar st $ \s -> s {newPeers = nub (p : newPeers s)}
 
 getSyncingPeer :: (MonadChainLogic a p m, MonadIO m) => m (Maybe p)
-getSyncingPeer = syncingPeer <$> (readTVarIO =<< asks chainState)
+getSyncingPeer = fmap fst . syncingPeer <$> (readTVarIO =<< asks chainState)
 
 setSyncingPeer :: (MonadChainLogic a p m, MonadIO m) => p -> m ()
-setSyncingPeer p =
+setSyncingPeer p = do
+    now <- liftIO getCurrentTime
     asks chainState >>= \v ->
-        atomically . modifyTVar v $ \s -> s {syncingPeer = Just p}
+        atomically . modifyTVar v $ \s -> s {syncingPeer = Just (p, now)}
 
 isSynced :: (MonadChainLogic a p m, MonadIO m) => m Bool
 isSynced = mySynced <$> (asks chainState >>= readTVarIO)
@@ -216,14 +219,15 @@ finishPeer p =
             s
                 { newPeers = delete p (newPeers s)
                 , syncingPeer =
-                      if syncingPeer s == Just p
-                          then Nothing
-                          else syncingPeer s
+                      case syncingPeer s of
+                          Just (p', _)
+                              | p == p' -> Nothing
+                          _ -> syncingPeer s
                 }
 
 lastMessage :: (MonadChainLogic a p m, MonadIO m) => m (Maybe (p, UTCTime))
 lastMessage =
     asks chainState >>= readTVarIO >>= \s ->
         case syncingPeer s of
-            Just p -> return $ Just (p, lastReceived s)
+            Just pt  -> return $ Just pt
             Nothing -> return Nothing
