@@ -177,7 +177,7 @@ withTestNode net str f =
                     , nodeConfNetAddr = NetworkAddress 0 (SockAddrInet 0 0)
                     , nodeConfNet = net
                     , nodeConfEvents = (`sendSTM` node_inbox)
-                    , nodeConfTimeout = 2
+                    , nodeConfTimeout = 10
                     }
         withNode cfg $ \(mgr, ch) ->
             lift $
