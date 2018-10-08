@@ -12,14 +12,15 @@ module Network.Haskoin.Node.Chain.Logic where
 import           Control.Arrow
 import           Control.Monad
 import           Control.Monad.Except
-import           Control.Monad.Logger
 import           Control.Monad.Reader
+import           Control.Monad.Trans.Maybe
 import qualified Data.ByteString             as B
 import           Data.Default
 import           Data.List
 import           Data.Maybe
 import           Data.Serialize              as S
 import           Data.Time.Clock
+import           Data.Time.Clock.POSIX
 import           Data.Word
 import           Database.RocksDB            (DB)
 import qualified Database.RocksDB            as R
@@ -80,7 +81,7 @@ data ChainReader a p = ChainReader
     , chainState :: !(TVar (ChainState p))
     }
 
-instance (Monad m, MonadLoggerIO m, MonadReader (ChainReader a p) m) =>
+instance (Monad m, MonadIO m, MonadReader (ChainReader a p) m) =>
          BlockHeaders m where
     addBlockHeader bn = do
         db <- asks myChainDB
@@ -148,18 +149,22 @@ importHeaders net hs =
 
 notifySynced :: (MonadIO m, MonadChainLogic a p m) => m Bool
 notifySynced =
-    asks chainState >>= \st ->
-        atomically $
-        readTVar st >>= \s ->
-            if isJust (syncingPeer s)
-                then return False
-                else if null (newPeers s)
-                         then if mySynced s
-                                  then return False
-                                  else do
-                                      writeTVar st s {mySynced = True}
-                                      return True
-                         else return False
+    fmap isJust $
+    runMaybeT $ do
+        bb <- getBestBlockHeader
+        now <- liftIO getCurrentTime
+        let bt =
+                posixSecondsToUTCTime . realToFrac . blockTimestamp $
+                nodeHeader bb
+        guard (diffUTCTime now bt < 2 * 60 * 60)
+        st <- asks chainState
+        MaybeT . atomically . runMaybeT $ do
+            s <- lift $ readTVar st
+            guard . isNothing $ syncingPeer s
+            guard . null $ newPeers s
+            guard . not $ mySynced s
+            lift $ writeTVar st s {mySynced = True}
+            return ()
 
 nextPeer :: (MonadIO m, MonadChainLogic a p m) => m (Maybe p)
 nextPeer = listToMaybe . newPeers <$> (asks chainState >>= readTVarIO)

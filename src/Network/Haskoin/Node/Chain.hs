@@ -110,11 +110,9 @@ syncNewPeer = do
             $(logDebugS) "Chain" $ "Already syncing against peer " <> s
 
 syncNotif :: MonadChain m => m ()
-syncNotif = do
-    $(logDebugS) "Chain" "Checking if should notify that chain is synced"
-    notifySynced >>= \case
-        True -> getBestBlockHeader >>= chainEvent . ChainSynced
-        False -> $(logDebugS) "Chain" "Not synced yet"
+syncNotif =
+    notifySynced >>= \x ->
+        when x $ getBestBlockHeader >>= chainEvent . ChainSynced
 
 syncPeer :: MonadChain m => Peer -> m ()
 syncPeer p = do
