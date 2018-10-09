@@ -24,6 +24,9 @@ module Network.Haskoin.Node.Chain
 import           Control.Monad
 import           Control.Monad.Logger
 import           Control.Monad.Reader
+import           Control.Monad.Trans.Maybe
+import           Data.List
+import           Data.Maybe
 import           Data.String.Conversions
 import           Data.Text                        (Text)
 import           Data.Time.Clock
@@ -31,13 +34,14 @@ import           Network.Haskoin.Block
 import           Network.Haskoin.Network
 import           Network.Haskoin.Node.Chain.Logic
 import           Network.Haskoin.Node.Common
+import           Network.Socket                   (SockAddr)
 import           NQE
 import           System.Random
 import           UnliftIO
 import           UnliftIO.Concurrent
 
 type MonadChain m
-     = (MonadLoggerIO m, MonadChainLogic ChainConfig Peer m)
+     = (MonadLoggerIO m, MonadChainLogic ChainConfig (Peer, SockAddr) m)
 
 -- | Launch process to synchronize block headers in current thread.
 chain ::
@@ -80,10 +84,12 @@ chainEvent e = do
 
 processHeaders ::
        MonadChain m => Peer -> [BlockHeader] -> m ()
-processHeaders p hs = do
-    s <- peerString p
+processHeaders p hs = void . runMaybeT $ do
+    a <- peerAddr p >>= \case
+        Just a -> return a
+        Nothing -> MaybeT $ return Nothing
+    let s = peerString (Just a)
     net <- chainConfNetwork <$> asks myReader
-    mgr <- chainConfManager <$> asks myReader
     $(logDebugS) "Chain" $
         "Importing " <> cs (show (length hs)) <> " headers from peer " <> s
     importHeaders net hs >>= \case
@@ -91,7 +97,7 @@ processHeaders p hs = do
             $(logErrorS) "Chain" $
                 "Could not connect headers sent by peer " <> s <> ": " <>
                 cs (show e)
-            managerKill e p mgr
+            e `killPeer` p
         Right done -> do
             setLastReceived
             best <- getBestBlockHeader
@@ -101,10 +107,10 @@ processHeaders p hs = do
                     $(logDebugS) "Chain" $
                         "Finished importing headers from peer: " <> s
                     MSendHeaders `sendMessage` p
-                    finishPeer p
+                    finishPeer (p, a)
                     syncNewPeer
                     syncNotif
-                else syncPeer p
+                else syncPeer p a
 
 syncNewPeer :: MonadChain m => m ()
 syncNewPeer = do
@@ -115,39 +121,40 @@ syncNewPeer = do
             nextPeer >>= \case
                 Nothing ->
                     $(logInfoS) "Chain" "Finished syncing against all peers"
-                Just p -> syncPeer p
-        Just p -> do
-            s <- peerString p
-            $(logDebugS) "Chain" $ "Already syncing against peer " <> s
+                Just (p, a) -> syncPeer p a
+        Just (_, a) ->
+            $(logDebugS) "Chain" $
+            "Already syncing against peer " <> peerString (Just a)
 
 syncNotif :: MonadChain m => m ()
 syncNotif =
     notifySynced >>= \x ->
         when x $ getBestBlockHeader >>= chainEvent . ChainSynced
 
-syncPeer :: MonadChain m => Peer -> m ()
-syncPeer p = do
-    s <- peerString p
-    $(logInfoS) "Chain" $ "Syncing against peer " <> s
+syncPeer :: MonadChain m => Peer -> SockAddr -> m ()
+syncPeer p a = do
+    $(logInfoS) "Chain" $ "Syncing against peer " <> peerString (Just a)
     bb <- getBestBlockHeader
-    gh <- syncHeaders bb p
+    gh <- syncHeaders bb (p, a)
     MGetHeaders gh `sendMessage` p
 
 chainMessage :: MonadChain m => ChainMessage -> m ()
 chainMessage (ChainGetBest reply) =
     getBestBlockHeader >>= atomically . reply
 chainMessage (ChainHeaders p hs) = do
-    s <- peerString p
+    s <- peerString <$> peerAddr p
     $(logDebugS) "Chain" $
         "Processing " <> cs (show (length hs)) <> " headers from peer " <> s
     processHeaders p hs
 chainMessage (ChainPeerConnected p a) = do
-    $(logDebugS) "Chain" $ "Adding new peer to sync queue: " <> cs (show a)
-    addPeer p
+    let s = peerString (Just a)
+    $(logDebugS) "Chain" $ "Adding new peer to sync queue: " <> s
+    addPeer (p, a)
     syncNewPeer
 chainMessage (ChainPeerDisconnected p a) = do
-    $(logWarnS) "Chain" $ "Removing a peer from sync queue: " <> cs (show a)
-    finishPeer p
+    let s = peerString (Just a)
+    $(logWarnS) "Chain" $ "Removing a peer from sync queue: " <> s
+    finishPeer (p, a)
     syncNewPeer
 chainMessage (ChainGetAncestor h n reply) =
     getAncestor h n >>= atomically . reply
@@ -158,15 +165,15 @@ chainMessage (ChainGetBlock h reply) =
 chainMessage (ChainIsSynced reply) =
     isSynced >>= atomically . reply
 chainMessage ChainPing = do
-    ChainConfig {chainConfManager = mgr, chainConfTimeout = to} <- asks myReader
+    ChainConfig {chainConfTimeout = to} <- asks myReader
     now <- liftIO getCurrentTime
     lastMessage >>= \case
         Nothing -> return ()
-        Just (p, t)
+        Just ((p, a), t)
             | diffUTCTime now t > fromIntegral to -> do
-                s <- peerString p
+                let s = peerString (Just a)
                 $(logErrorS) "Chain" $ "Syncing peer timed out: " <> s
-                managerKill PeerTimeout p mgr
+                PeerTimeout `killPeer` p
             | otherwise -> return ()
 
 withSyncLoop :: (MonadUnliftIO m, MonadLoggerIO m) => Chain -> m a -> m a
@@ -178,9 +185,12 @@ withSyncLoop ch f = withAsync go $ \a -> link a >> f
                 liftIO (randomRIO (250 * 1000, 1000 * 1000))
             ChainPing `send` ch
 
-peerString :: MonadChain m => Peer -> m Text
-peerString p = do
-    ChainConfig {chainConfManager = mgr} <- asks myReader
-    managerGetPeer p mgr >>= \case
-        Nothing -> return "[unknown]"
-        Just o -> return . cs . show $ onlinePeerAddress o
+peerAddr :: MonadChain m => Peer -> m (Maybe SockAddr)
+peerAddr p =
+    asks chainState >>= readTVarIO >>= \s ->
+        let ps = newPeers s <> maybeToList (fst <$> syncingPeer s)
+         in return $ snd <$> find ((== p) . fst) ps
+
+peerString :: Maybe SockAddr -> Text
+peerString Nothing  = "[unknown]"
+peerString (Just a) = cs $ show a

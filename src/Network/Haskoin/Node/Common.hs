@@ -130,9 +130,6 @@ data ManagerConfig = ManagerConfig
 data ManagerMessage
     = ManagerConnect
       -- ^ try to connect to peers
-    | ManagerKill !PeerException
-                  !Peer
-      -- ^ kill this peer with supplied exception
     | ManagerGetPeers !(Listen [OnlinePeer])
       -- ^ get all connected peers
     | ManagerGetOnlinePeer !Peer !(Listen (Maybe OnlinePeer))
@@ -151,9 +148,7 @@ data ManagerMessage
 -- | Configuration for chain syncing process.
 data ChainConfig = ChainConfig
     { chainConfDB      :: !DB
-      -- ^ RocksDB database handle
-    , chainConfManager :: !Manager
-      -- ^ peer manager mailbox
+      -- ^ database handle
     , chainConfNetwork :: !Network
       -- ^ network constants
     , chainConfEvents  :: !(Listen ChainEvent)
@@ -264,6 +259,7 @@ data PeerEvent
 -- | Incoming messages that a peer accepts.
 data PeerMessage
     = GetPublisher !(Listen (Publisher Message))
+    | KillPeer !PeerException
     | SendMessage !Message
 
 -- | Resolve a host and port to a list of 'SockAddr'. May make use DNS resolver.
@@ -318,8 +314,8 @@ managerGetPeer :: MonadIO m => Peer -> Manager -> m (Maybe OnlinePeer)
 managerGetPeer p mgr = ManagerGetOnlinePeer p `query` mgr
 
 -- | Ask manager to kill a peer with the provided exception.
-managerKill :: MonadIO m => PeerException -> Peer -> Manager -> m ()
-managerKill e p mgr = ManagerKill e p `send` mgr
+killPeer :: MonadIO m => PeerException -> Peer -> m ()
+killPeer e p = KillPeer e `send` p
 
 -- | Internal function used by manager to check peers periodically.
 managerCheck :: MonadIO m => Peer -> Manager -> m ()

@@ -214,7 +214,6 @@ managerMessage ManagerConnect = do
         getNewPeer >>= \case
             Nothing -> return ()
             Just sa -> connectPeer sa
-managerMessage (ManagerKill e p) = killPeer e p
 managerMessage (ManagerPeerDied a e) = processPeerOffline a e
 managerMessage ManagerPurgePeers = do
     $(logWarnS) "Manager" "Purging connected peers and peer database"
@@ -259,14 +258,6 @@ pingPeer p = do
             | otherwise ->
                 $(logWarnS) "Manager" $
                 "Will not ping peer " <> s <> " until handshake complete"
-
-killPeer :: MonadManager m => PeerException -> Peer -> m ()
-killPeer e p = void . runMaybeT $ do
-    b <- asks onlinePeers
-    o <- MaybeT . atomically $ findPeer b p
-    s <- atomically $ peerString b p
-    $(logErrorS) "Manager" $ "Killing peer " <> s <> ": " <> cs (show e)
-    onlinePeerAsync o `cancelWith` e
 
 processPeerOffline :: MonadManager m => Child -> Maybe SomeException -> m ()
 processPeerOffline a e = do

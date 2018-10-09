@@ -31,7 +31,7 @@ module Haskoin.Node
     , node
     , managerGetPeers
     , managerGetPeer
-    , managerKill
+    , killPeer
     , sendMessage
     , peerGetPublisher
     , peerGetBlocks
@@ -94,7 +94,6 @@ node cfg mgr_inbox ch_inbox = do
         let chain_config =
                 ChainConfig
                     { chainConfDB = nodeConfDB cfg
-                    , chainConfManager = mgr
                     , chainConfNetwork = nodeConfNet cfg
                     , chainConfEvents = chain_events
                     , chainConfTimeout = nodeConfTimeout cfg

@@ -47,10 +47,11 @@ peer pc inbox = withConnection a $ \ad -> runReaderT (peer_session ad) pc
     a = peerConfAddress pc
     go = forever $ receive inbox >>= dispatchMessage pc
     net = peerConfNetwork pc
+    p = inboxToMailbox inbox
     peer_session ad =
         let ins = appSource ad
             ons = appSink ad
-            src = runConduit $ ins .| inPeerConduit net a .| mapM_C send_msg
+            src = runConduit $ ins .| inPeerConduit net a p .| mapM_C send_msg
             snk = outPeerConduit net .| ons
          in withAsync src $ \as -> do
                 link as
@@ -66,36 +67,38 @@ dispatchMessage cfg (SendMessage msg) = do
     yield msg
 dispatchMessage cfg (GetPublisher reply) =
     atomically $ reply (peerConfListen cfg)
+dispatchMessage _ (KillPeer e) =
+    throwIO e
 
 -- | Internal conduit to parse messages coming from peer.
 inPeerConduit ::
        MonadLoggerIO m
     => Network
     -> SockAddr
+    -> Peer
     -> ConduitT ByteString Message m ()
-inPeerConduit net a = do
+inPeerConduit net a p = forever $ do
     x <- takeCE 24 .| foldC
     case decode x of
         Left _ -> do
             $(logErrorS)
                 (peerString a)
                 "Could not decode incoming message header"
-            throwIO DecodeHeaderError
+            DecodeHeaderError `killPeer` p
         Right (MessageHeader _ _ len _) -> do
             when (len > 32 * 2 ^ (20 :: Int)) $ do
                 $(logErrorS) (peerString a) "Payload too large"
-                throwIO $ PayloadTooLarge len
+                PayloadTooLarge len `killPeer` p
             y <- takeCE (fromIntegral len) .| foldC
             case runGet (getMessage net) $ x `B.append` y of
                 Left e -> do
                     $(logErrorS) (peerString a) $
                         "Cannot decode payload: " <> cs (show e)
-                    throwIO CannotDecodePayload
+                    CannotDecodePayload `killPeer` p
                 Right msg -> do
                     $(logDebugS) (peerString a) $
                         "Incoming: " <> cs (commandToString (msgType msg))
                     yield msg
-                    inPeerConduit net a
 
 -- | Outgoing peer conduit to serialize and send messages.
 outPeerConduit :: Monad m => Network -> ConduitT Message ByteString m ()
