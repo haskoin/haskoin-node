@@ -313,7 +313,7 @@ managerGetPeers mgr = ManagerGetPeers `query` mgr
 managerGetPeer :: MonadIO m => Peer -> Manager -> m (Maybe OnlinePeer)
 managerGetPeer p mgr = ManagerGetOnlinePeer p `query` mgr
 
--- | Ask manager to kill a peer with the provided exception.
+-- | Kill a peer with the provided exception.
 killPeer :: MonadIO m => PeerException -> Peer -> m ()
 killPeer e p = KillPeer e `send` p
 
