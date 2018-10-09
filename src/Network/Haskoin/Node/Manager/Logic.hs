@@ -120,8 +120,8 @@ newPeerDB db score sa =
 
 initPeerDB :: MonadUnliftIO m => DB -> Bool -> m ()
 initPeerDB db discover = do
-    ver <- fromMaybe 0 <$> retrieve db def PeerDataVersionKey
-    when (ver < versionPeerDB || not discover) $ purgePeerDB db
+    ver <- retrieve db def PeerDataVersionKey
+    when (ver /= Just versionPeerDB || not discover) $ purgePeerDB db
     R.insert db PeerDataVersionKey versionPeerDB
 
 purgePeerDB :: MonadUnliftIO m => DB -> m ()

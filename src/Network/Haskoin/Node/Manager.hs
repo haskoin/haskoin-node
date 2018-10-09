@@ -124,8 +124,7 @@ purgePeers = do
     purgePeerDB db
 
 forwardMessage :: MonadManager m => Peer -> Message -> m ()
-forwardMessage p msg =
-    managerEvent $ PeerMessage p msg
+forwardMessage p msg = managerEvent $ PeerMessage p msg
 
 managerEvent :: MonadManager m => PeerEvent -> m ()
 managerEvent e = mgrConfEvents <$> asks myConfig >>= \l -> atomically $ l e
@@ -327,12 +326,13 @@ connectPeer sa = do
     sup <- asks mySupervisor
     nonce <- liftIO randomIO
     bb <- getBestBlock
+    now <- computeTime
     let rmt = NetworkAddress (srv net) sa
-    ver <- buildVersion net nonce bb ad rmt
+        ver = buildVersion net nonce bb ad rmt now
     (inbox, p) <- newMailbox
-    let pc =
+    let pc pub =
             PeerConfig
-                { peerConfListen = l mgr
+                { peerConfListen = pub
                 , peerConfNetwork = net
                 , peerConfAddress = sa
                 }
@@ -342,14 +342,16 @@ connectPeer sa = do
     _ <- atomically $ newOnlinePeer b sa nonce p a
     return ()
   where
-    l mgr (p, m) = ManagerPeerMessage p m `sendSTM` mgr
+    l mgr p m = ManagerPeerMessage p m `sendSTM` mgr
     srv net
         | getSegWit net = 8
         | otherwise = 0
     launch mgr pc inbox p =
-        withPeerLoop p mgr $ \a -> do
-            link a
-            peer pc inbox
+        withPublisher $ \pub ->
+            bracket (subscribe pub (l mgr p)) (unsubscribe pub) $ \_ ->
+                withPeerLoop p mgr $ \a -> do
+                    link a
+                    peer (pc pub) inbox
 
 withPeerLoop :: MonadUnliftIO m => Peer -> Manager -> (Async a -> m a) -> m a
 withPeerLoop p mgr = withAsync go

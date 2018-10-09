@@ -106,8 +106,8 @@ instance (Monad m, MonadIO m, MonadReader (ChainReader a p) m) =>
 initChainDB :: (MonadChainLogic a p m, MonadUnliftIO m) => Network -> m ()
 initChainDB net = do
     db <- asks myChainDB
-    ver <- fromMaybe 1 <$> retrieve db def ChainDataVersionKey
-    when (ver < dataVersion) purgeChainDB
+    ver <- retrieve db def ChainDataVersionKey
+    when (ver /= Just dataVersion) purgeChainDB
     R.insert db ChainDataVersionKey dataVersion
     retrieve db def BestBlockKey >>= \b ->
         when (isNothing (b :: Maybe BlockNode)) $ do
@@ -138,7 +138,7 @@ importHeaders ::
     -> m (Either PeerException Bool)
 importHeaders net hs =
     runExceptT $ do
-        now <- computeTime
+        now <- fromIntegral <$> computeTime
         lift (connectBlocks net now hs) >>= \case
             Right _ ->
                 case length hs of

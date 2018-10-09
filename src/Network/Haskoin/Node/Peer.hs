@@ -26,29 +26,38 @@ import           Network.Socket              (SockAddr)
 import           NQE
 import           UnliftIO
 
-peer :: (MonadUnliftIO m, MonadLoggerIO m) => PeerConfig -> Inbox Message -> m ()
+-- | Run peer process in current thread.
+peer ::
+       (MonadUnliftIO m, MonadLoggerIO m)
+    => PeerConfig
+    -> Inbox PeerMessage
+    -> m ()
 peer pc inbox = withConnection a $ \ad -> runReaderT (peer_session ad) pc
   where
     a = peerConfAddress pc
-    go =
-        forever $
-        receive inbox >>= \msg -> do
-            $(logDebugS) (peerString a) $
-                "Outgoing: " <> cs (commandToString (msgType msg))
-            yield msg
+    go = forever $ receive inbox >>= dispatchMessage pc
     net = peerConfNetwork pc
-    p = inboxToMailbox inbox
-    peer_session ad = do
+    peer_session ad =
         let ins = appSource ad
             ons = appSink ad
             src = runConduit $ ins .| inPeerConduit net a .| mapM_C send_msg
             snk = outPeerConduit net .| ons
-        withAsync src $ \as -> do
-            link as
-            runConduit (go .| snk)
-    l = peerConfListen pc
-    send_msg msg = atomically . l $ (p, msg)
+         in withAsync src $ \as -> do
+                link as
+                runConduit (go .| snk)
+    send_msg = (`send` peerConfListen pc) . Event
 
+-- | Internal function to dispatch peer messages.
+dispatchMessage ::
+       MonadLoggerIO m => PeerConfig -> PeerMessage -> ConduitT i Message m ()
+dispatchMessage cfg (SendMessage msg) = do
+    $(logDebugS) (peerString (peerConfAddress cfg)) $
+        "Outgoing: " <> cs (commandToString (msgType msg))
+    yield msg
+dispatchMessage cfg (GetPublisher reply) =
+    atomically $ reply (peerConfListen cfg)
+
+-- | Internal conduit to parse messages coming from peer.
 inPeerConduit ::
        MonadLoggerIO m
     => Network
@@ -62,7 +71,7 @@ inPeerConduit net a = do
                 (peerString a)
                 "Could not decode incoming message header"
             throwIO DecodeHeaderError
-        Right (MessageHeader _ _cmd len _) -> do
+        Right (MessageHeader _ _ len _) -> do
             when (len > 32 * 2 ^ (20 :: Int)) $ do
                 $(logErrorS) (peerString a) "Payload too large"
                 throwIO $ PayloadTooLarge len
@@ -78,8 +87,10 @@ inPeerConduit net a = do
                     yield msg
                     inPeerConduit net a
 
+-- | Outgoing peer conduit to serialize and send messages.
 outPeerConduit :: Monad m => Network -> ConduitT Message ByteString m ()
 outPeerConduit net = awaitForever $ yield . runPut . putMessage net
 
+-- | Peer string for logging
 peerString :: SockAddr -> Text
 peerString a = "Peer{" <> cs (show a) <> "}"
