@@ -7,6 +7,16 @@
 {-# LANGUAGE OverloadedStrings         #-}
 {-# LANGUAGE TemplateHaskell           #-}
 {-# LANGUAGE UndecidableInstances      #-}
+{-|
+Module      : Network.Haskoin.Node.Chain
+Copyright   : No rights reserved
+License     : UNLICENSE
+Maintainer  : xenog@protonmail.com
+Stability   : experimental
+Portability : POSIX
+
+Block chain headers synchronizing process.
+-}
 module Network.Haskoin.Node.Chain
     ( chain
     ) where
@@ -29,6 +39,7 @@ import           UnliftIO.Concurrent
 type MonadChain m
      = (MonadLoggerIO m, MonadChainLogic ChainConfig Peer m)
 
+-- | Launch process to synchronize block headers in current thread.
 chain ::
        (MonadUnliftIO m, MonadLoggerIO m)
     => ChainConfig

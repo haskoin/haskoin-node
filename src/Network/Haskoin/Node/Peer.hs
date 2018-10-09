@@ -5,6 +5,16 @@
 {-# LANGUAGE RecordWildCards       #-}
 {-# LANGUAGE TemplateHaskell       #-}
 {-# LANGUAGE TypeFamilies          #-}
+{-|
+Module      : Network.Haskoin.Node.Peer
+Copyright   : No rights reserved
+License     : UNLICENSE
+Maintainer  : xenog@protonmail.com
+Stability   : experimental
+Portability : POSIX
+
+Network peer process. Represents a network peer connection locally.
+-}
 module Network.Haskoin.Node.Peer
     ( peer
     ) where

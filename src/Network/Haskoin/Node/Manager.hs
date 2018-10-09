@@ -6,6 +6,16 @@
 {-# LANGUAGE OverloadedStrings     #-}
 {-# LANGUAGE TemplateHaskell       #-}
 {-# LANGUAGE TupleSections         #-}
+{-|
+Module      : Network.Haskoin.Node.Manager
+Copyright   : No rights reserved
+License     : UNLICENSE
+Maintainer  : xenog@protonmail.com
+Stability   : experimental
+Portability : POSIX
+
+Peer manager process.
+-}
 module Network.Haskoin.Node.Manager
     ( manager
     ) where
@@ -32,8 +42,10 @@ import           System.Random
 import           UnliftIO
 import           UnliftIO.Concurrent
 
+-- | Monad used by most functions in this module.
 type MonadManager m = (MonadLoggerIO m, MonadReader ManagerReader m)
 
+-- | Reader for peer configuration and state.
 data ManagerReader = ManagerReader
     { myConfig     :: !ManagerConfig
     , mySupervisor :: !Supervisor
@@ -42,7 +54,7 @@ data ManagerReader = ManagerReader
     , onlinePeers  :: !(TVar [OnlinePeer])
     }
 
--- | Peer Manager process. In order to start it needs to receive one
+-- | Peer Manager process. In order to fully start it needs to receive a
 -- 'ManageBestBlock' event.
 manager ::
        (MonadUnliftIO m, MonadLoggerIO m)

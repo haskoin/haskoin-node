@@ -1,6 +1,19 @@
 {-# LANGUAGE FlexibleContexts      #-}
 {-# LANGUAGE GADTs                 #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-|
+Module      : Haskoin.Node
+Copyright   : No rights reserved
+License     : UNLICENSE
+Maintainer  : xenog@protonmail.com
+Stability   : experimental
+Portability : POSIX
+
+Integrates peers, manager, and block header synchronization processes.
+
+Messages from peers that aren't consumed by the peer manager or chain are
+forwarded to the listen action provided in the node configuration.
+-}
 module Haskoin.Node
     ( Host
     , Port
@@ -40,6 +53,8 @@ import           Network.Haskoin.Node.Manager
 import           NQE
 import           UnliftIO
 
+-- | Launch a node in the background. Pass a 'Manager' and 'Chain' to a
+-- function. Node will stop once the function ends.
 withNode ::
        (MonadLoggerIO m, MonadUnliftIO m)
     => NodeConfig
@@ -52,6 +67,7 @@ withNode cfg f = do
         link a
         f (inboxToMailbox mgr_inbox, inboxToMailbox ch_inbox)
 
+-- | Launch node process in the foreground.
 node ::
        ( MonadLoggerIO m
        , MonadUnliftIO m

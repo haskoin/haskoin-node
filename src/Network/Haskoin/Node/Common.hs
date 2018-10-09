@@ -2,6 +2,16 @@
 {-# LANGUAGE LambdaCase            #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RankNTypes            #-}
+{-|
+Module      : Network.Haskoin.Node.Common
+Copyright   : No rights reserved
+License     : UNLICENSE
+Maintainer  : xenog@protonmail.com
+Stability   : experimental
+Portability : POSIX
+
+Common functions used by Haskoin Node.
+-}
 module Network.Haskoin.Node.Common where
 
 import           Conduit
@@ -328,7 +338,8 @@ sendMessage :: MonadIO m => Message -> Peer -> m ()
 sendMessage msg p = SendMessage msg `send` p
 
 -- | Request full blocks from peer. Will return 'Nothing' if the list of blocks
--- returned by the peer is incomplete or a timeout is reached.
+-- returned by the peer is incomplete, comes out of order, or a timeout is
+-- reached.
 peerGetBlocks ::
        MonadUnliftIO m
     => Network
@@ -337,69 +348,78 @@ peerGetBlocks ::
     -> [BlockHash]
     -> m (Maybe [Block])
 peerGetBlocks net time p bhs =
-    runMaybeT $ do
-        pub <- MaybeT $ queryS time GetPublisher p
-        MaybeT $
-            withSubscription pub $ \sub -> do
-                MGetData (GetData ivs) `sendMessage` p
-                r <- liftIO randomIO
-                MPing (Ping r) `sendMessage` p
-                join <$>
-                    timeout
-                        (time * 1000 * 1000)
-                        (runMaybeT (get_blocks sub r [] bhs))
+    runMaybeT $ mapM f =<< MaybeT (peerGetData time p (GetData ivs))
   where
-    get_blocks _ _ acc [] = return $ reverse acc
-    get_blocks sub r acc (h:hs) =
-        receive sub >>= \case
-            MBlock b
-                | headerHash (blockHeader b) == h ->
-                    get_blocks sub r (b : acc) hs
-            MNotFound (NotFound nvs)
-                | not (null (nvs `union` ivs)) -> MaybeT $ return Nothing
-            MPong (Pong r')
-                | r == r' -> MaybeT $ return Nothing
-            _
-                | null acc -> get_blocks sub r acc (h : hs)
-                | otherwise -> MaybeT $ return Nothing
+    f (Right b) = return b
+    f (Left _)  = MaybeT $ return Nothing
     c
         | getSegWit net = InvWitnessBlock
         | otherwise = InvBlock
     ivs = map (InvVector c . getBlockHash) bhs
 
--- | Request transactions from peer.
+-- | Request transactions from peer. Will return 'Nothing' if the list of
+-- transactions returned by the peer is incomplete, comes out of order, or a
+-- timeout is reached.
 peerGetTxs ::
-       MonadUnliftIO m => Network -> Int -> Peer -> [TxHash] -> m (Maybe [Tx])
+       MonadUnliftIO m
+    => Network
+    -> Int
+    -> Peer
+    -> [TxHash]
+    -> m (Maybe [Tx])
 peerGetTxs net time p ths =
+    runMaybeT $ mapM f =<< MaybeT (peerGetData time p (GetData ivs))
+  where
+    f (Right _) = MaybeT $ return Nothing
+    f (Left t)  = return t
+    c
+        | getSegWit net = InvWitnessTx
+        | otherwise = InvTx
+    ivs = map (InvVector c . getTxHash) ths
+
+-- | Request transactions and/or blocks from peer. Return maybe if any single
+-- inventory fails to be retrieved, if they come out of order, or if timeout is
+-- reached.
+peerGetData ::
+       MonadUnliftIO m => Int -> Peer -> GetData -> m (Maybe [Either Tx Block])
+peerGetData time p gd@(GetData ivs) =
     runMaybeT $ do
         pub <- MaybeT $ queryS time GetPublisher p
         MaybeT $
             withSubscription pub $ \sub -> do
-                MGetData (GetData ivs) `sendMessage` p
+                MGetData gd `sendMessage` p
                 r <- liftIO randomIO
                 MPing (Ping r) `sendMessage` p
                 join <$>
                     timeout
                         (time * 1000 * 1000)
-                        (runMaybeT (get_txs sub r [] ths))
+                        (runMaybeT (get_thing sub r [] ivs))
   where
-    get_txs _ _ acc [] = return $ reverse acc
-    get_txs sub r acc (h:hs) =
+    get_thing _ _ acc [] = return $ reverse acc
+    get_thing sub r acc hss@(InvVector t h:hs) =
         receive sub >>= \case
-            MTx t
-                | txHash t == h -> get_txs sub r (t : acc) hs
+            MTx tx
+                | is_tx t && getTxHash (txHash tx) == h ->
+                    get_thing sub r (Left tx : acc) hs
+            MBlock b@(Block bh _)
+                | is_block t && getBlockHash (headerHash bh) == h ->
+                    get_thing sub r (Right b : acc) hs
             MNotFound (NotFound nvs)
-                | not (null (nvs `union` ivs)) -> MaybeT $ return Nothing
+                | not (null (nvs `union` hs)) -> MaybeT $ return Nothing
             MPong (Pong r')
                 | r == r' -> MaybeT $ return Nothing
             _
-                | null acc -> get_txs sub r acc (h : hs)
+                | null acc -> get_thing sub r acc hss
                 | otherwise -> MaybeT $ return Nothing
-    con
-        | getSegWit net = InvWitnessTx
-        | otherwise = InvTx
-    ivs = map (InvVector con . getTxHash) ths
+    is_tx InvWitnessTx = True
+    is_tx InvTx        = True
+    is_tx _            = False
+    is_block InvWitnessBlock = True
+    is_block InvBlock        = True
+    is_block _               = False
 
+-- | Ping a peer and await response. Return 'False' if response not received
+-- before timeout.
 peerPing :: MonadUnliftIO m => Int -> Peer -> m Bool
 peerPing time p =
     fmap isJust . runMaybeT $ do
@@ -435,7 +455,7 @@ buildVersion net nonce height loc rmt time =
         , relay = True
         }
 
--- | Get a block header from chain process.
+-- | Get a block header from 'Chain' process.
 chainGetBlock :: MonadIO m => BlockHash -> Chain -> m (Maybe BlockNode)
 chainGetBlock bh ch = ChainGetBlock bh `query` ch
 

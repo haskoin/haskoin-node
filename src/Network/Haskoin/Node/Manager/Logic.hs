@@ -5,6 +5,16 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings     #-}
 {-# LANGUAGE TupleSections         #-}
+{-|
+Module      : Network.Haskoin.Manager.Logic
+Copyright   : No rights reserved
+License     : UNLICENSE
+Maintainer  : xenog@protonmail.com
+Stability   : experimental
+Portability : POSIX
+
+Logic and data for peer manager.
+-}
 module Network.Haskoin.Node.Manager.Logic where
 
 import           Conduit
@@ -31,16 +41,23 @@ import           Network.Socket              (SockAddr (..))
 import           UnliftIO
 import           UnliftIO.Resource           as U
 
+-- | Database version.
 versionPeerDB :: Word32
 versionPeerDB = 4
 
+-- | Peer score. Lower is better.
 type Score = Word8
 
+-- | Peer address key in database.
 data PeerAddress
-    = PeerAddress { getPeerAddress :: !SockAddr }
+    = PeerAddress {
+        getPeerAddress :: !SockAddr
+        -- ^ peer network address and port
+        }
     | PeerAddressBase
     deriving (Eq, Ord, Show)
 
+-- | Peer score key in database.
 data PeerScore
     = PeerScore !Score !SockAddr
     | PeerScoreBase
@@ -59,6 +76,7 @@ instance Serialize PeerScore where
 instance Key PeerScore
 instance KeyValue PeerScore ()
 
+-- | Database version key.
 data PeerDataVersionKey = PeerDataVersionKey
     deriving (Eq, Ord, Show)
 
@@ -80,6 +98,7 @@ instance Serialize PeerAddress where
         encodeSockAddr a
     put PeerAddressBase = S.putWord8 0x81
 
+-- | Peer data.
 data PeerData = PeerData !Score !Bool
     deriving (Eq, Show, Ord)
 
@@ -90,6 +109,7 @@ instance Serialize PeerData where
 instance Key PeerAddress
 instance KeyValue PeerAddress PeerData
 
+-- | Update peer score and pass in database.
 updatePeerDB :: MonadIO m => DB -> SockAddr -> Score -> Bool -> m ()
 updatePeerDB db sa score pass =
     retrieve db def (PeerAddress sa) >>= \case
@@ -107,6 +127,7 @@ updatePeerDB db sa score pass =
                 , insertOp (PeerScore score sa) ()
                 ]
 
+-- | Add a peer to database if it is not already there.
 newPeerDB :: MonadIO m => DB -> Score -> SockAddr -> m ()
 newPeerDB db score sa =
     retrieve db def (PeerAddress sa) >>= \case
@@ -118,12 +139,15 @@ newPeerDB db score sa =
                 , insertOp (PeerScore score sa) ()
                 ]
 
+-- | Initialize peer database, purging it of conflicting records if version
+-- doesn't match current one.
 initPeerDB :: MonadUnliftIO m => DB -> Bool -> m ()
 initPeerDB db discover = do
     ver <- retrieve db def PeerDataVersionKey
     when (ver /= Just versionPeerDB || not discover) $ purgePeerDB db
     R.insert db PeerDataVersionKey versionPeerDB
 
+-- | Purge conflicting records from database.
 purgePeerDB :: MonadUnliftIO m => DB -> m ()
 purgePeerDB db = purge_byte 0x81 >> purge_byte 0x83
   where
@@ -141,18 +165,23 @@ purgePeerDB db = purge_byte 0x81 >> purge_byte 0x83
                     recurse_delete it byte
                 | otherwise -> return ()
 
+-- | Get static network seeds.
 networkSeeds :: Network -> [HostPort]
 networkSeeds net = map (, getDefaultPort net) (getSeeds net)
 
+-- | Get default score for statically-defined peers.
 staticPeerScore :: Score
 staticPeerScore = maxBound `div` 4
 
+-- | Get default score for network seeds.
 netSeedScore :: Score
 netSeedScore = maxBound `div` 2
 
+-- | Get default score for discovered peers.
 netPeerScore :: Score
 netPeerScore = maxBound `div` 3 * 4
 
+-- | Serialize a network address/port.
 encodeSockAddr :: SockAddr -> Put
 encodeSockAddr (SockAddrInet6 p _ (a, b, c, d) _) = do
     S.putWord32be a
@@ -168,6 +197,7 @@ encodeSockAddr (SockAddrInet p a) = do
     S.putWord16be (fromIntegral p)
 encodeSockAddr x = error $ "Could not encode address: " <> show x
 
+-- | Deserialize a network address/port.
 decodeSockAddr :: Get SockAddr
 decodeSockAddr = do
     a <- S.getWord32be
@@ -183,9 +213,11 @@ decodeSockAddr = do
             p <- S.getWord16be
             return $ SockAddrInet6 (fromIntegral p) 0 (a, b, c, d) 0
 
+-- | Get database entry for provided peer address.
 getPeerDB :: MonadIO m => DB -> SockAddr -> m (Maybe PeerData)
 getPeerDB db sa = retrieve db def (PeerAddress sa)
 
+-- | Promote a peer by improving its score (decreasing by one).
 promotePeerDB :: MonadIO m => DB -> SockAddr -> m ()
 promotePeerDB db sa =
     getPeerDB db sa >>= \case
@@ -199,6 +231,7 @@ promotePeerDB db sa =
                      else score - 1)
                 pass
 
+-- | Demote a peer increasing its score by one.
 demotePeerDB :: MonadIO m => DB -> SockAddr -> m ()
 demotePeerDB db sa =
     getPeerDB db sa >>= \case
@@ -212,6 +245,7 @@ demotePeerDB db sa =
                      else score + 1)
                 pass
 
+-- | Get a peer from database. Pass a list of addresses to exclude.
 getNewPeerDB :: MonadUnliftIO m => DB -> [SockAddr] -> m (Maybe SockAddr)
 getNewPeerDB db exclude = go >>= maybe (reset_pass >> go) (return . Just)
   where
@@ -238,6 +272,9 @@ getNewPeerDB db exclude = go >>= maybe (reset_pass >> go) (return . Just)
     get_address (PeerScore _ addr, ()) = addr
     get_address _ = error "Something is wrong with peer database"
 
+-- | Report receiving a pong from a connected peer. Will store ping roundtrip
+-- time in a window of latest eleven. Peers are returned by the manager in order
+-- of median roundtrip time.
 gotPong ::
        TVar [OnlinePeer]
     -> Word64
@@ -259,16 +296,20 @@ gotPong b nonce now p =
                     }
         return diff
 
+-- | Return time of last ping sent to peer, if any.
 lastPing :: TVar [OnlinePeer] -> Peer -> STM (Maybe UTCTime)
 lastPing b p =
     findPeer b p >>= \case
         Just OnlinePeer {onlinePeerPing = Just (time, _)} -> return (Just time)
         _ -> return Nothing
 
+-- | Set nonce and time of last ping sent to peer.
 setPeerPing :: TVar [OnlinePeer] -> Word64 -> UTCTime -> Peer -> STM ()
 setPeerPing b nonce now p =
     modifyPeer b p $ \o -> o {onlinePeerPing = Just (now, nonce)}
 
+-- | Set version for online peer. Will set the peer connected status to 'True'
+-- if a verack message has already been registered for that peer.
 setPeerVersion ::
        TVar [OnlinePeer]
     -> Peer
@@ -291,6 +332,7 @@ setPeerVersion b p v =
                 lift $ insertPeer b n
                 return n
 
+-- | Register that a verack message was received from a peer.
 setPeerVerAck :: TVar [OnlinePeer] -> Peer -> STM (Maybe OnlinePeer)
 setPeerVerAck b p =
     runMaybeT $ do
@@ -303,12 +345,17 @@ setPeerVerAck b p =
         lift $ insertPeer b n
         return n
 
+-- | Create 'OnlinePeer' data structure.
 newOnlinePeer ::
        TVar [OnlinePeer]
     -> SockAddr
+       -- ^ peer address
     -> Word64
+       -- ^ nonce sent to peer
     -> Peer
+       -- ^ peer mailbox
     -> Async ()
+       -- ^ peer asynchronous handle
     -> STM OnlinePeer
 newOnlinePeer b sa nonce peer peer_async = do
     let op =
@@ -326,27 +373,34 @@ newOnlinePeer b sa nonce peer peer_async = do
     insertPeer b op
     return op
 
+-- | Get a human-readable string for the peer address.
 peerString :: TVar [OnlinePeer] -> Peer -> STM Text
 peerString b p =
     maybe "[unknown]" (cs . show . onlinePeerAddress) <$> findPeer b p
 
+-- | Find a connected peer.
 findPeer :: TVar [OnlinePeer] -> Peer -> STM (Maybe OnlinePeer)
 findPeer b p = find ((== p) . onlinePeerMailbox) <$> readTVar b
 
+-- | Insert or replace a connected peer.
 insertPeer :: TVar [OnlinePeer] -> OnlinePeer -> STM ()
 insertPeer b o = modifyTVar b $ \x -> sort . nub $ o : x
 
+-- | Modify an online peer.
 modifyPeer :: TVar [OnlinePeer] -> Peer -> (OnlinePeer -> OnlinePeer) -> STM ()
 modifyPeer b p f =
     findPeer b p >>= \case
         Nothing -> return ()
         Just o -> insertPeer b $ f o
 
+-- | Remove an online peer.
 removePeer :: TVar [OnlinePeer] -> Peer -> STM ()
 removePeer b p = modifyTVar b $ \x -> filter ((/= p) . onlinePeerMailbox) x
 
+-- | Find online peer by asynchronous handle.
 findPeerAsync :: TVar [OnlinePeer] -> Async () -> STM (Maybe OnlinePeer)
 findPeerAsync b a = find ((== a) . onlinePeerAsync) <$> readTVar b
 
+-- | Remove online peer by asynchronous handle.
 removePeerAsync :: TVar [OnlinePeer] -> Async () -> STM ()
 removePeerAsync b a = modifyTVar b $ \x -> filter ((/= a) . onlinePeerAsync) x
