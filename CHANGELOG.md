@@ -9,12 +9,14 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 - Versioning for chain and peer database.
 - Automatic purging of chain and peer database when version changes.
 - Add extra timers.
+- Add publishers to every peer.
 
 ### Changed
 - Full reimplementation of node API.
 - Simplify peer selection and management.
 - Merge manager and peer events.
 - Rename configuration variables for node.
+- Separate logic from actors for peer manager and chain.
 
 ### Removed
 - Remove irrelevant fields from peer information.
