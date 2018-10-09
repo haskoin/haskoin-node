@@ -337,6 +337,12 @@ managerSetBest bh mgr = ManagerBestBlock bh `send` mgr
 sendMessage :: MonadIO m => Message -> Peer -> m ()
 sendMessage msg p = SendMessage msg `send` p
 
+-- | Get a publisher associated to a peer. Must provide timeout as peer may
+-- disconnect and become unresponsive.
+peerGetPublisher ::
+       MonadUnliftIO m => Int -> Peer -> m (Maybe (Publisher Message))
+peerGetPublisher time = queryS time GetPublisher
+
 -- | Request full blocks from peer. Will return 'Nothing' if the list of blocks
 -- returned by the peer is incomplete, comes out of order, or a timeout is
 -- reached.

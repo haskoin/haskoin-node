@@ -33,6 +33,7 @@ module Haskoin.Node
     , managerGetPeer
     , managerKill
     , sendMessage
+    , peerGetPublisher
     , peerGetBlocks
     , peerGetTxs
     , chainGetBlock
