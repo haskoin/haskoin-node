@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 ## 0.8.1
 ### Changed
 - Corrected documentation for `killPeer` function.
+- Leave time out of logic code.
 
 ## 0.8.0
 ### Changed
