@@ -29,8 +29,6 @@ import           Data.Default
 import           Data.List
 import           Data.Maybe
 import           Data.Serialize              as S
-import           Data.Time.Clock
-import           Data.Time.Clock.POSIX
 import           Data.Word
 import           Database.RocksDB            (DB)
 import qualified Database.RocksDB            as R
@@ -59,7 +57,7 @@ instance Serialize ChainDataVersionKey where
 
 -- | Mutable state for the header chain process.
 data ChainState p = ChainState
-    { syncingPeer :: !(Maybe (p, UTCTime))
+    { syncingPeer :: !(Maybe (p, Timestamp))
       -- ^ peer to sync against and time of last received message
     , newPeers    :: ![p]
       -- ^ queue of peers to sync against
@@ -164,18 +162,17 @@ purgeChainDB = do
 importHeaders ::
        (MonadIO m, BlockHeaders m)
     => Network
+    -> Timestamp
     -> [BlockHeader]
     -> m (Either PeerException Bool)
-importHeaders net hs =
-    runExceptT $ do
-        now <- fromIntegral <$> computeTime
-        lift (connectBlocks net now hs) >>= \case
-            Right _ ->
-                case length hs of
-                    2000 -> return False
-                    _    -> return True
-            Left _ ->
-                throwError PeerSentBadHeaders
+importHeaders net now hs =
+    runExceptT $
+    lift (connectBlocks net now hs) >>= \case
+        Right _ ->
+            case length hs of
+                2000 -> return False
+                _ -> return True
+        Left _ -> throwError PeerSentBadHeaders
 
 -- | Check if best block header is in sync with the rest of the block chain by
 -- comparing the best block with the current time, verifying that there are no
@@ -184,16 +181,12 @@ importHeaders net hs =
 -- whether to notify other processes that the header chain has been synced. The
 -- state of the chain will be flipped to synced when this function returns
 -- 'True'.
-notifySynced :: (MonadIO m, MonadChainLogic a p m) => m Bool
-notifySynced =
+notifySynced :: (MonadIO m, MonadChainLogic a p m) => Timestamp -> m Bool
+notifySynced now =
     fmap isJust $
     runMaybeT $ do
         bb <- getBestBlockHeader
-        now <- liftIO getCurrentTime
-        let bt =
-                posixSecondsToUTCTime . realToFrac . blockTimestamp $
-                nodeHeader bb
-        guard (diffUTCTime now bt < 2 * 60 * 60)
+        guard (now - blockTimestamp (nodeHeader bb) < 2 * 60 * 60)
         st <- asks chainState
         MaybeT . atomically . runMaybeT $ do
             s <- lift $ readTVar st
@@ -211,12 +204,12 @@ nextPeer = listToMaybe . newPeers <$> (asks chainState >>= readTVarIO)
 -- locator to send to that peer for syncing.
 syncHeaders ::
        (Eq p, MonadChainLogic a p m, MonadIO m)
-    => BlockNode
+    => Timestamp
+    -> BlockNode
     -> p
     -> m GetHeaders
-syncHeaders bb p = do
+syncHeaders now bb p = do
     st <- asks chainState
-    now <- liftIO getCurrentTime
     atomically . modifyTVar st $ \s ->
         s {syncingPeer = Just (p, now), newPeers = delete p (newPeers s)}
     loc <- blockLocator bb
@@ -229,10 +222,9 @@ syncHeaders bb p = do
             }
 
 -- | Set the time of last received data to now if a syncing peer is active.
-setLastReceived :: (MonadChainLogic a p m, MonadIO m) => m ()
-setLastReceived = do
+setLastReceived :: (MonadChainLogic a p m, MonadIO m) => Timestamp -> m ()
+setLastReceived now = do
     st <- asks chainState
-    now <- liftIO getCurrentTime
     atomically . modifyTVar st $ \s ->
         s {syncingPeer = second (const now) <$> syncingPeer s}
 
@@ -247,9 +239,8 @@ getSyncingPeer :: (MonadChainLogic a p m, MonadIO m) => m (Maybe p)
 getSyncingPeer = fmap fst . syncingPeer <$> (readTVarIO =<< asks chainState)
 
 -- | Set syncing peer to the pone provided.
-setSyncingPeer :: (MonadChainLogic a p m, MonadIO m) => p -> m ()
-setSyncingPeer p = do
-    now <- liftIO getCurrentTime
+setSyncingPeer :: (MonadChainLogic a p m, MonadIO m) => Timestamp -> p -> m ()
+setSyncingPeer now p =
     asks chainState >>= \v ->
         atomically . modifyTVar v $ \s -> s {syncingPeer = Just (p, now)}
 
@@ -280,5 +271,5 @@ finishPeer p =
                 }
 
 -- | Return the syncing peer and time of last communication received, if any.
-lastMessage :: (MonadChainLogic a p m, MonadIO m) => m (Maybe (p, UTCTime))
+lastMessage :: (MonadChainLogic a p m, MonadIO m) => m (Maybe (p, Timestamp))
 lastMessage = syncingPeer <$> (readTVarIO =<< asks chainState)

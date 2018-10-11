@@ -29,6 +29,7 @@ import           Control.Monad.Reader
 import           Control.Monad.Trans.Maybe
 import           Data.String.Conversions
 import           Data.Time.Clock
+import           Data.Time.Clock.POSIX
 import           Database.RocksDB                   (DB)
 import           Network.Haskoin.Block
 import           Network.Haskoin.Constants
@@ -329,7 +330,7 @@ connectPeer sa = do
     sup <- asks mySupervisor
     nonce <- liftIO randomIO
     bb <- getBestBlock
-    now <- computeTime
+    now <- round <$> liftIO getPOSIXTime
     let rmt = NetworkAddress (srv net) sa
         ver = buildVersion net nonce bb ad rmt now
     (inbox, p) <- newMailbox

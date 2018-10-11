@@ -23,7 +23,6 @@ import           Data.List
 import           Data.Maybe
 import           Data.String.Conversions
 import           Data.Time.Clock
-import           Data.Time.Clock.POSIX
 import           Data.Word
 import           Database.RocksDB            (DB)
 import           Network.Haskoin.Block
@@ -291,10 +290,6 @@ fromSockAddr sa = go `catch` e
     flags = [NI_NUMERICHOST, NI_NUMERICSERV]
     e :: Monad m => SomeException -> m (Maybe a)
     e _ = return Nothing
-
--- | Integer current time in seconds from 1970-01-01T00:00Z.
-computeTime :: MonadIO m => m Word64
-computeTime = round <$> liftIO getPOSIXTime
 
 -- | Our protocol version.
 myVersion :: Word32

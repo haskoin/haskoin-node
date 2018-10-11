@@ -29,7 +29,7 @@ import           Data.List
 import           Data.Maybe
 import           Data.String.Conversions
 import           Data.Text                        (Text)
-import           Data.Time.Clock
+import           Data.Time.Clock.POSIX
 import           Network.Haskoin.Block
 import           Network.Haskoin.Network
 import           Network.Haskoin.Node.Chain.Logic
@@ -92,14 +92,15 @@ processHeaders p hs = void . runMaybeT $ do
     net <- chainConfNetwork <$> asks myReader
     $(logDebugS) "Chain" $
         "Importing " <> cs (show (length hs)) <> " headers from peer " <> s
-    importHeaders net hs >>= \case
+    now <- round <$> liftIO getPOSIXTime
+    importHeaders net now hs >>= \case
         Left e -> do
             $(logErrorS) "Chain" $
                 "Could not connect headers sent by peer " <> s <> ": " <>
                 cs (show e)
             e `killPeer` p
         Right done -> do
-            setLastReceived
+            setLastReceived now
             best <- getBestBlockHeader
             chainEvent $ ChainBestBlock best
             if done
@@ -128,14 +129,15 @@ syncNewPeer = do
 
 syncNotif :: MonadChain m => m ()
 syncNotif =
-    notifySynced >>= \x ->
+    round <$> liftIO getPOSIXTime >>= notifySynced >>= \x ->
         when x $ getBestBlockHeader >>= chainEvent . ChainSynced
 
 syncPeer :: MonadChain m => Peer -> SockAddr -> m ()
 syncPeer p a = do
     $(logInfoS) "Chain" $ "Syncing against peer " <> peerString (Just a)
     bb <- getBestBlockHeader
-    gh <- syncHeaders bb (p, a)
+    now <- round <$> liftIO getPOSIXTime
+    gh <- syncHeaders now bb (p, a)
     MGetHeaders gh `sendMessage` p
 
 chainMessage :: MonadChain m => ChainMessage -> m ()
@@ -166,11 +168,11 @@ chainMessage (ChainIsSynced reply) =
     isSynced >>= atomically . reply
 chainMessage ChainPing = do
     ChainConfig {chainConfTimeout = to} <- asks myReader
-    now <- liftIO getCurrentTime
+    now <- round <$> liftIO getPOSIXTime
     lastMessage >>= \case
         Nothing -> return ()
         Just ((p, a), t)
-            | diffUTCTime now t > fromIntegral to -> do
+            | now - t > fromIntegral to -> do
                 let s = peerString (Just a)
                 $(logErrorS) "Chain" $ "Syncing peer timed out: " <> s
                 PeerTimeout `killPeer` p
