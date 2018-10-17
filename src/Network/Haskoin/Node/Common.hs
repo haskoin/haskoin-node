@@ -99,7 +99,7 @@ data NodeConfig = NodeConfig
       -- ^ network address for the local host
     , nodeConfNet      :: !Network
       -- ^ network constants
-    , nodeConfEvents   :: !(Publisher NodeEvent)
+    , nodeConfEvents   :: !(Listen NodeEvent)
       -- ^ node events are sent to this publisher
     , nodeConfTimeout  :: !Int
       -- ^ timeout in seconds

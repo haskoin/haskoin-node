@@ -110,13 +110,13 @@ node cfg mgr_inbox ch_inbox = do
                 ChainHeaders p (map fst hcs) `sendSTM` ch
             PeerConnected p a -> do
                 ChainPeerConnected p a `sendSTM` ch
-                Event (PeerEvent event) `sendSTM` nodeConfEvents cfg
+                nodeConfEvents cfg $ PeerEvent event
             PeerDisconnected p a -> do
                 ChainPeerDisconnected p a `sendSTM` ch
-                Event (PeerEvent event) `sendSTM` nodeConfEvents cfg
-            _ -> Event (PeerEvent event) `sendSTM` nodeConfEvents cfg
+                nodeConfEvents cfg $ PeerEvent event
+            _ -> nodeConfEvents cfg $ PeerEvent event
     chain_events event = do
-        Event (ChainEvent event) `sendSTM` nodeConfEvents cfg
+        nodeConfEvents cfg $ ChainEvent event
         case event of
             ChainBestBlock b -> ManagerBestBlock (nodeHeight b) `sendSTM` mgr
             _ -> return ()

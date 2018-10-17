@@ -115,33 +115,26 @@ withTestNode ::
     -> m a
 withTestNode net str f =
     runNoLoggingT $
-    withSystemTempDirectory ("haskoin-node-test-" <> str <> "-") $ \w ->
-        withPublisher $ \pub ->
-            withSubscription pub $ \node_inbox -> do
-                db <-
-                    R.open
-                        w
-                        R.defaultOptions
-                            { R.createIfMissing = True
-                            , R.compression = R.SnappyCompression
-                            }
-                let cfg =
-                        NodeConfig
-                            { nodeConfMaxPeers = 20
-                            , nodeConfDB = db
-                            , nodeConfPeers = []
-                            , nodeConfDiscover = True
-                            , nodeConfNetAddr =
-                                  NetworkAddress 0 (SockAddrInet 0 0)
-                            , nodeConfNet = net
-                            , nodeConfEvents = pub
-                            , nodeConfTimeout = 10
-                            }
-                withNode cfg $ \(mgr, ch) ->
-                    lift $
-                    f
-                        TestNode
-                            { testMgr = mgr
-                            , testChain = ch
-                            , nodeEvents = node_inbox
-                            }
+    withSystemTempDirectory ("haskoin-node-test-" <> str <> "-") $ \w -> do
+        node_inbox <- newInbox
+        db <-
+            R.open
+                w
+                R.defaultOptions
+                    { R.createIfMissing = True
+                    , R.compression = R.SnappyCompression
+                    }
+        let cfg =
+                NodeConfig
+                    { nodeConfMaxPeers = 20
+                    , nodeConfDB = db
+                    , nodeConfPeers = []
+                    , nodeConfDiscover = True
+                    , nodeConfNetAddr = NetworkAddress 0 (SockAddrInet 0 0)
+                    , nodeConfNet = net
+                    , nodeConfEvents = (`sendSTM` node_inbox)
+                    , nodeConfTimeout = 10
+                    }
+        withNode cfg $ \(mgr, ch) ->
+            lift $
+            f TestNode {testMgr = mgr, testChain = ch, nodeEvents = node_inbox}
