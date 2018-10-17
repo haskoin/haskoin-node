@@ -21,6 +21,8 @@ module Haskoin.Node
     , Peer
     , Chain
     , Manager
+    , ChainMessage
+    , ManagerMessage
     , OnlinePeer(..)
     , NodeConfig(..)
     , NodeEvent(..)
