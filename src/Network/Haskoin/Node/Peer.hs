@@ -47,11 +47,10 @@ peer pc inbox = withConnection a $ \ad -> runReaderT (peer_session ad) pc
     a = peerConfAddress pc
     go = forever $ receive inbox >>= dispatchMessage pc
     net = peerConfNetwork pc
-    p = inboxToMailbox inbox
     peer_session ad =
         let ins = appSource ad
             ons = appSink ad
-            src = runConduit $ ins .| inPeerConduit net a p .| mapM_C send_msg
+            src = runConduit $ ins .| inPeerConduit net a .| mapM_C send_msg
             snk = outPeerConduit net .| ons
          in withAsync src $ \as -> do
                 link as
@@ -75,26 +74,25 @@ inPeerConduit ::
        MonadLoggerIO m
     => Network
     -> SockAddr
-    -> Peer
     -> ConduitT ByteString Message m ()
-inPeerConduit net a p = forever $ do
+inPeerConduit net a = forever $ do
     x <- takeCE 24 .| foldC
     case decode x of
         Left _ -> do
             $(logErrorS)
                 (peerString a)
                 "Could not decode incoming message header"
-            DecodeHeaderError `killPeer` p
+            throwIO DecodeHeaderError
         Right (MessageHeader _ _ len _) -> do
             when (len > 32 * 2 ^ (20 :: Int)) $ do
                 $(logErrorS) (peerString a) "Payload too large"
-                PayloadTooLarge len `killPeer` p
+                throwIO $ PayloadTooLarge len
             y <- takeCE (fromIntegral len) .| foldC
             case runGet (getMessage net) $ x `B.append` y of
                 Left e -> do
                     $(logErrorS) (peerString a) $
                         "Cannot decode payload: " <> cs (show e)
-                    CannotDecodePayload `killPeer` p
+                    throwIO CannotDecodePayload
                 Right msg -> do
                     $(logDebugS) (peerString a) $
                         "Incoming: " <> cs (commandToString (msgType msg))
