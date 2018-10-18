@@ -53,7 +53,7 @@ chain cfg inbox = do
     st <-
         newTVarIO
             ChainState
-                { syncingPeer = Nothing
+                { chainSyncing = Nothing
                 , mySynced = False
                 , newPeers = []
                 }
@@ -135,7 +135,10 @@ syncNotif =
 syncPeer :: MonadChain m => Peer -> SockAddr -> m ()
 syncPeer p a = do
     $(logInfoS) "Chain" $ "Syncing against peer " <> peerString (Just a)
-    bb <- getBestBlockHeader
+    bb <- chainSyncingPeer >>= \case
+        Just ChainSync {chainSyncPeer = (p', _), chainHighest = Just g}
+            | p == p' -> return g
+        _ -> getBestBlockHeader
     now <- round <$> liftIO getPOSIXTime
     gh <- syncHeaders now bb (p, a)
     MGetHeaders gh `sendMessage` p
@@ -169,9 +172,9 @@ chainMessage (ChainIsSynced reply) =
 chainMessage ChainPing = do
     ChainConfig {chainConfTimeout = to} <- asks myReader
     now <- round <$> liftIO getPOSIXTime
-    lastMessage >>= \case
+    chainSyncingPeer >>= \case
         Nothing -> return ()
-        Just ((p, a), t)
+        Just ChainSync {chainSyncPeer = (p, a), chainTimestamp = t}
             | now - t > fromIntegral to -> do
                 let s = peerString (Just a)
                 $(logErrorS) "Chain" $ "Syncing peer timed out: " <> s
@@ -190,7 +193,7 @@ withSyncLoop ch f = withAsync go $ \a -> link a >> f
 peerAddr :: MonadChain m => Peer -> m (Maybe SockAddr)
 peerAddr p =
     asks chainState >>= readTVarIO >>= \s ->
-        let ps = newPeers s <> maybeToList (fst <$> syncingPeer s)
+        let ps = newPeers s <> maybeToList (chainSyncPeer <$> chainSyncing s)
          in return $ snd <$> find ((== p) . fst) ps
 
 peerString :: Maybe SockAddr -> Text

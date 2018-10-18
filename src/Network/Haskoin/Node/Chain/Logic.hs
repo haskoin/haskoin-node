@@ -19,7 +19,6 @@ State and code for block header synchronization.
 -}
 module Network.Haskoin.Node.Chain.Logic where
 
-import           Control.Arrow
 import           Control.Monad
 import           Control.Monad.Except
 import           Control.Monad.Reader
@@ -55,9 +54,15 @@ instance Serialize ChainDataVersionKey where
         return ChainDataVersionKey
     put ChainDataVersionKey = S.putWord8 0x92
 
+data ChainSync p = ChainSync
+    { chainSyncPeer  :: !p
+    , chainTimestamp :: !Timestamp
+    , chainHighest   :: !(Maybe BlockNode)
+    }
+
 -- | Mutable state for the header chain process.
 data ChainState p = ChainState
-    { syncingPeer :: !(Maybe (p, Timestamp))
+    { chainSyncing :: !(Maybe (ChainSync p))
       -- ^ peer to sync against and time of last received message
     , newPeers    :: ![p]
       -- ^ queue of peers to sync against
@@ -160,7 +165,7 @@ purgeChainDB = do
 -- headers is 2000, which means that there are possibly more headers to sync
 -- from whatever peer delivered these.
 importHeaders ::
-       (MonadIO m, BlockHeaders m)
+       (MonadIO m, BlockHeaders m, MonadChainLogic a p m)
     => Network
     -> Timestamp
     -> [BlockHeader]
@@ -168,7 +173,18 @@ importHeaders ::
 importHeaders net now hs =
     runExceptT $
     lift (connectBlocks net now hs) >>= \case
-        Right _ ->
+        Right _ -> do
+            case hs of
+                [] -> return ()
+                _ -> do
+                    bb <- getBlockHeader (headerHash (last hs))
+                    box <- asks chainState
+                    atomically . modifyTVar box $ \s ->
+                        s
+                            { chainSyncing =
+                                  (\x -> x {chainHighest = bb}) <$>
+                                  chainSyncing s
+                            }
             case length hs of
                 2000 -> return False
                 _ -> return True
@@ -190,7 +206,7 @@ notifySynced now =
         st <- asks chainState
         MaybeT . atomically . runMaybeT $ do
             s <- lift $ readTVar st
-            guard . isNothing $ syncingPeer s
+            guard . isNothing $ chainSyncing s
             guard . null $ newPeers s
             guard . not $ mySynced s
             lift $ writeTVar st s {mySynced = True}
@@ -211,7 +227,16 @@ syncHeaders ::
 syncHeaders now bb p = do
     st <- asks chainState
     atomically . modifyTVar st $ \s ->
-        s {syncingPeer = Just (p, now), newPeers = delete p (newPeers s)}
+        s
+            { chainSyncing =
+                  Just
+                      ChainSync
+                          { chainSyncPeer = p
+                          , chainTimestamp = now
+                          , chainHighest = Nothing
+                          }
+            , newPeers = delete p (newPeers s)
+            }
     loc <- blockLocator bb
     return
         GetHeaders
@@ -226,7 +251,7 @@ setLastReceived :: (MonadChainLogic a p m, MonadIO m) => Timestamp -> m ()
 setLastReceived now = do
     st <- asks chainState
     atomically . modifyTVar st $ \s ->
-        s {syncingPeer = second (const now) <$> syncingPeer s}
+        s {chainSyncing = (\p -> p {chainTimestamp = now}) <$> chainSyncing s}
 
 -- | Add a new peer to the queue of peers to sync against.
 addPeer :: (Eq p, MonadIO m, MonadChainLogic a p m) => p -> m ()
@@ -236,13 +261,22 @@ addPeer p = do
 
 -- | Get syncing peer if there is one.
 getSyncingPeer :: (MonadChainLogic a p m, MonadIO m) => m (Maybe p)
-getSyncingPeer = fmap fst . syncingPeer <$> (readTVarIO =<< asks chainState)
+getSyncingPeer = fmap chainSyncPeer . chainSyncing <$> (readTVarIO =<< asks chainState)
 
 -- | Set syncing peer to the pone provided.
 setSyncingPeer :: (MonadChainLogic a p m, MonadIO m) => Timestamp -> p -> m ()
 setSyncingPeer now p =
     asks chainState >>= \v ->
-        atomically . modifyTVar v $ \s -> s {syncingPeer = Just (p, now)}
+        atomically . modifyTVar v $ \s ->
+            s
+                { chainSyncing =
+                      Just
+                          ChainSync
+                              { chainSyncPeer = p
+                              , chainTimestamp = now
+                              , chainHighest = Nothing
+                              }
+                }
 
 -- | Return 'True' if the chain has ever been considered synced. it will always
 -- return 'True', even if the chain gets out of sync for any reason.
@@ -263,13 +297,16 @@ finishPeer p =
         atomically . modifyTVar st $ \s ->
             s
                 { newPeers = delete p (newPeers s)
-                , syncingPeer =
-                      case syncingPeer s of
-                          Just (p', _)
+                , chainSyncing =
+                      case chainSyncing s of
+                          Just ChainSync { chainSyncPeer = p'
+                                         , chainTimestamp = _
+                                         , chainHighest = _
+                                         }
                               | p == p' -> Nothing
-                          _ -> syncingPeer s
+                          _ -> chainSyncing s
                 }
 
--- | Return the syncing peer and time of last communication received, if any.
-lastMessage :: (MonadChainLogic a p m, MonadIO m) => m (Maybe (p, Timestamp))
-lastMessage = syncingPeer <$> (readTVarIO =<< asks chainState)
+-- | Return syncing peer data.
+chainSyncingPeer :: (MonadChainLogic a p m, MonadIO m) => m (Maybe (ChainSync p))
+chainSyncingPeer = chainSyncing <$> (readTVarIO =<< asks chainState)
