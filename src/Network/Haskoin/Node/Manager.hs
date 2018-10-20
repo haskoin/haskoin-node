@@ -189,11 +189,10 @@ managerMessage (ManagerPeerMessage p msg@(MPong (Pong n))) = do
                 "Forwarding pong " <> cs (show n) <> " from " <> s
             forwardMessage p msg
         Just d -> do
-            let ms = d * 1000
+            let ms = fromRational . toRational $ d * 1000 :: Double
             $(logDebugS) "Manager" $
                 "Ping " <> cs (show n) <> " to " <> s <> " took " <>
-                cs (show ms) <>
-                " milliseconds"
+                cs (show ms)
 managerMessage (ManagerPeerMessage p (MPing (Ping n))) = do
     b <- asks onlinePeers
     s <- atomically $ peerString b p
