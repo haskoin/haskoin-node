@@ -84,34 +84,35 @@ chainEvent e = do
 
 processHeaders ::
        MonadChain m => Peer -> [BlockHeader] -> m ()
-processHeaders p hs = void . runMaybeT $ do
-    a <- peerAddr p >>= \case
-        Just a -> return a
-        Nothing -> MaybeT $ return Nothing
-    let s = peerString (Just a)
-    net <- chainConfNetwork <$> asks myReader
-    $(logDebugS) "Chain" $
-        "Importing " <> cs (show (length hs)) <> " headers from peer " <> s
-    now <- round <$> liftIO getPOSIXTime
-    importHeaders net now hs >>= \case
-        Left e -> do
-            $(logErrorS) "Chain" $
-                "Could not connect headers sent by peer " <> s <> ": " <>
-                cs (show e)
-            e `killPeer` p
-        Right done -> do
-            setLastReceived now
-            best <- getBestBlockHeader
-            chainEvent $ ChainBestBlock best
-            if done
-                then do
-                    $(logDebugS) "Chain" $
-                        "Finished importing headers from peer: " <> s
-                    MSendHeaders `sendMessage` p
-                    finishPeer (p, a)
-                    syncNewPeer
-                    syncNotif
-                else syncPeer p a
+processHeaders p hs =
+    void . runMaybeT $ do
+        a <- peerAddr p
+        let s = peerString a
+        net <- chainConfNetwork <$> asks myReader
+        $(logDebugS) "Chain" $
+            "Importing " <> cs (show (length hs)) <> " headers from peer " <> s
+        now <- round <$> liftIO getPOSIXTime
+        importHeaders net now hs >>= \case
+            Left e -> do
+                $(logErrorS) "Chain" $
+                    "Could not connect headers sent by peer " <> s <> ": " <>
+                    cs (show e)
+                e `killPeer` p
+            Right done -> do
+                setLastReceived now
+                best <- getBestBlockHeader
+                chainEvent $ ChainBestBlock best
+                if done
+                    then do
+                        $(logDebugS) "Chain" $
+                            "Finished importing headers from peer: " <> s
+                        MSendHeaders `sendMessage` p
+                        case a of
+                            Just x -> finishPeer (p, x)
+                            Nothing -> return ()
+                        syncNewPeer
+                        syncNotif
+                    else forM_ a (syncPeer p)
 
 syncNewPeer :: MonadChain m => m ()
 syncNewPeer = do
