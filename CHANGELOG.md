@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 ## 0.9.3
 ### Change
 - Correct display of milliseconds in log.
+- Correct bug when receiving headers from unknown peer.
+- Simplify chain syncing code.
 
 ## 0.9.2
 ### Change

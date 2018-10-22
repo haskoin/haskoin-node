@@ -25,23 +25,19 @@ import           Control.Monad
 import           Control.Monad.Logger
 import           Control.Monad.Reader
 import           Control.Monad.Trans.Maybe
-import           Data.List
-import           Data.Maybe
 import           Data.String.Conversions
-import           Data.Text                        (Text)
 import           Data.Time.Clock.POSIX
 import           Network.Haskoin.Block
 import           Network.Haskoin.Network
 import           Network.Haskoin.Node.Chain.Logic
 import           Network.Haskoin.Node.Common
-import           Network.Socket                   (SockAddr)
 import           NQE
 import           System.Random
 import           UnliftIO
 import           UnliftIO.Concurrent
 
 type MonadChain m
-     = (MonadLoggerIO m, MonadChainLogic ChainConfig (Peer, SockAddr) m)
+     = (MonadLoggerIO m, MonadChainLogic ChainConfig Peer m)
 
 -- | Launch process to synchronize block headers in current thread.
 chain ::
@@ -86,17 +82,13 @@ processHeaders ::
        MonadChain m => Peer -> [BlockHeader] -> m ()
 processHeaders p hs =
     void . runMaybeT $ do
-        a <- peerAddr p
-        let s = peerString a
         net <- chainConfNetwork <$> asks myReader
         $(logDebugS) "Chain" $
-            "Importing " <> cs (show (length hs)) <> " headers from peer " <> s
+            "Importing " <> cs (show (length hs)) <> " headers"
         now <- round <$> liftIO getPOSIXTime
         importHeaders net now hs >>= \case
             Left e -> do
-                $(logErrorS) "Chain" $
-                    "Could not connect headers sent by peer " <> s <> ": " <>
-                    cs (show e)
+                $(logErrorS) "Chain" "Could not connect received headers"
                 e `killPeer` p
             Right done -> do
                 setLastReceived now
@@ -104,15 +96,14 @@ processHeaders p hs =
                 chainEvent $ ChainBestBlock best
                 if done
                     then do
-                        $(logDebugS) "Chain" $
-                            "Finished importing headers from peer: " <> s
+                        $(logDebugS)
+                            "Chain"
+                            "Finished importing headers from peer"
                         MSendHeaders `sendMessage` p
-                        case a of
-                            Just x -> finishPeer (p, x)
-                            Nothing -> return ()
+                        finishPeer p
                         syncNewPeer
                         syncNotif
-                    else forM_ a (syncPeer p)
+                    else syncPeer p
 
 syncNewPeer :: MonadChain m => m ()
 syncNewPeer = do
@@ -123,44 +114,38 @@ syncNewPeer = do
             nextPeer >>= \case
                 Nothing ->
                     $(logInfoS) "Chain" "Finished syncing against all peers"
-                Just (p, a) -> syncPeer p a
-        Just (_, a) ->
-            $(logDebugS) "Chain" $
-            "Already syncing against peer " <> peerString (Just a)
+                Just p -> syncPeer p
+        Just _ -> $(logDebugS) "Chain" "Already syncing against a peer"
 
 syncNotif :: MonadChain m => m ()
 syncNotif =
     round <$> liftIO getPOSIXTime >>= notifySynced >>= \x ->
         when x $ getBestBlockHeader >>= chainEvent . ChainSynced
 
-syncPeer :: MonadChain m => Peer -> SockAddr -> m ()
-syncPeer p a = do
-    $(logInfoS) "Chain" $ "Syncing against peer " <> peerString (Just a)
+syncPeer :: MonadChain m => Peer -> m ()
+syncPeer p = do
+    $(logInfoS) "Chain" "Syncing against selected peer"
     bb <- chainSyncingPeer >>= \case
-        Just ChainSync {chainSyncPeer = (p', _), chainHighest = Just g}
+        Just ChainSync {chainSyncPeer = p', chainHighest = Just g}
             | p == p' -> return g
         _ -> getBestBlockHeader
     now <- round <$> liftIO getPOSIXTime
-    gh <- syncHeaders now bb (p, a)
+    gh <- syncHeaders now bb p
     MGetHeaders gh `sendMessage` p
 
 chainMessage :: MonadChain m => ChainMessage -> m ()
 chainMessage (ChainGetBest reply) =
     getBestBlockHeader >>= atomically . reply
 chainMessage (ChainHeaders p hs) = do
-    s <- peerString <$> peerAddr p
-    $(logDebugS) "Chain" $
-        "Processing " <> cs (show (length hs)) <> " headers from peer " <> s
+    $(logDebugS) "Chain" $ "Processing " <> cs (show (length hs)) <> " headers"
     processHeaders p hs
 chainMessage (ChainPeerConnected p a) = do
-    let s = peerString (Just a)
-    $(logDebugS) "Chain" $ "Adding new peer to sync queue: " <> s
-    addPeer (p, a)
+    $(logDebugS) "Chain" $ "Adding new peer to sync queue: " <> cs (show a)
+    addPeer p
     syncNewPeer
 chainMessage (ChainPeerDisconnected p a) = do
-    let s = peerString (Just a)
-    $(logWarnS) "Chain" $ "Removing a peer from sync queue: " <> s
-    finishPeer (p, a)
+    $(logWarnS) "Chain" $ "Removing a peer from sync queue: " <> cs (show a)
+    finishPeer p
     syncNewPeer
 chainMessage (ChainGetAncestor h n reply) =
     getAncestor h n >>= atomically . reply
@@ -175,10 +160,9 @@ chainMessage ChainPing = do
     now <- round <$> liftIO getPOSIXTime
     chainSyncingPeer >>= \case
         Nothing -> return ()
-        Just ChainSync {chainSyncPeer = (p, a), chainTimestamp = t}
+        Just ChainSync {chainSyncPeer = p, chainTimestamp = t}
             | now - t > fromIntegral to -> do
-                let s = peerString (Just a)
-                $(logErrorS) "Chain" $ "Syncing peer timed out: " <> s
+                $(logErrorS) "Chain" "Syncing peer timed out"
                 PeerTimeout `killPeer` p
             | otherwise -> return ()
 
@@ -190,13 +174,3 @@ withSyncLoop ch f = withAsync go $ \a -> link a >> f
             threadDelay =<<
                 liftIO (randomRIO (250 * 1000, 1000 * 1000))
             ChainPing `send` ch
-
-peerAddr :: MonadChain m => Peer -> m (Maybe SockAddr)
-peerAddr p =
-    asks chainState >>= readTVarIO >>= \s ->
-        let ps = newPeers s <> maybeToList (chainSyncPeer <$> chainSyncing s)
-         in return $ snd <$> find ((== p) . fst) ps
-
-peerString :: Maybe SockAddr -> Text
-peerString Nothing  = "[unknown]"
-peerString (Just a) = cs $ show a
