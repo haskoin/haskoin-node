@@ -122,6 +122,7 @@ withTestNode net str f =
                 w
                 R.defaultOptions
                     { R.createIfMissing = True
+                    , R.errorIfExists = True
                     , R.compression = R.SnappyCompression
                     }
         let cfg =
