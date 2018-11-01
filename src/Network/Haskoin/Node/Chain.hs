@@ -86,6 +86,7 @@ processHeaders p hs =
         $(logDebugS) "Chain" $
             "Importing " <> cs (show (length hs)) <> " headers"
         now <- round <$> liftIO getPOSIXTime
+        pbest <- getBestBlockHeader
         importHeaders net now hs >>= \case
             Left e -> do
                 $(logErrorS) "Chain" "Could not connect received headers"
@@ -93,7 +94,8 @@ processHeaders p hs =
             Right done -> do
                 setLastReceived now
                 best <- getBestBlockHeader
-                chainEvent $ ChainBestBlock best
+                when (nodeHeader pbest /= nodeHeader best) . chainEvent $
+                    ChainBestBlock best
                 if done
                     then do
                         $(logDebugS)
