@@ -161,6 +161,7 @@ managerMessage (ManagerPeerMessage p (MVersion v)) = do
             $(logErrorS) "Manager" $
                 "Version rejected for peer " <> s <> ": " <> cs (show x)
             killPeer x p
+
 managerMessage (ManagerPeerMessage p MVerAck) = do
     b <- asks onlinePeers
     s <- atomically $ peerString b p
@@ -171,14 +172,18 @@ managerMessage (ManagerPeerMessage p MVerAck) = do
         Nothing -> do
             $(logErrorS) "Manager" $ "Received verack from unknown peer: " <> s
             killPeer UnknownPeer p
-managerMessage (ManagerPeerMessage p (MAddr (Addr nas))) = do
-    db <- getManagerDB
-    b <- asks onlinePeers
-    s <- atomically $ peerString b p
-    $(logInfoS) "Manager" $
-        "Received " <> cs (show (length nas)) <> " peers from " <> s
-    let sas = map (naAddress . snd) nas
-    forM_ sas $ newPeerDB db netPeerScore
+
+managerMessage (ManagerPeerMessage p (MAddr (Addr nas))) =
+    mgrConfDiscover <$> asks myConfig >>= \d ->
+        when d $ do
+            db <- getManagerDB
+            b <- asks onlinePeers
+            s <- atomically $ peerString b p
+            $(logInfoS) "Manager" $
+                "Received " <> cs (show (length nas)) <> " peers from " <> s
+            let sas = map (naAddress . snd) nas
+            forM_ sas $ newPeerDB db netPeerScore
+
 managerMessage (ManagerPeerMessage p msg@(MPong (Pong n))) = do
     now <- liftIO getCurrentTime
     b <- asks onlinePeers
@@ -192,12 +197,14 @@ managerMessage (ManagerPeerMessage p msg@(MPong (Pong n))) = do
             let ms = fromRational . toRational $ d * 1000 :: Double
             $(logDebugS) "Manager" $
                 "Ping roundtrip to " <> s <> ": " <> cs (show ms) <> " ms"
+
 managerMessage (ManagerPeerMessage p (MPing (Ping n))) = do
     b <- asks onlinePeers
     s <- atomically $ peerString b p
     $(logDebugS) "Manager" $
         "Responding to ping " <> cs (show n) <> " from " <> s
     MPong (Pong n) `sendMessage` p
+
 managerMessage (ManagerPeerMessage p msg) = do
     b <- asks onlinePeers
     s <- atomically $ peerString b p
@@ -205,7 +212,9 @@ managerMessage (ManagerPeerMessage p msg) = do
     $(logDebugS) "Manager" $
         "Forwarding message " <> cs cmd <> " from peer " <> s
     forwardMessage p msg
+
 managerMessage (ManagerBestBlock h) = putBestBlock h
+
 managerMessage ManagerConnect = do
     l <- length <$> getConnectedPeers
     x <- mgrConfMaxPeers <$> asks myConfig
@@ -213,15 +222,20 @@ managerMessage ManagerConnect = do
         getNewPeer >>= \case
             Nothing -> return ()
             Just sa -> connectPeer sa
+
 managerMessage (ManagerPeerDied a e) = processPeerOffline a e
+
 managerMessage ManagerPurgePeers = do
     $(logWarnS) "Manager" "Purging connected peers and peer database"
     purgePeers
+
 managerMessage (ManagerGetPeers reply) =
     getConnectedPeers >>= atomically . reply
+
 managerMessage (ManagerGetOnlinePeer p reply) = do
     b <- asks onlinePeers
     atomically $ findPeer b p >>= reply
+
 managerMessage (ManagerCheckPeer p) = checkPeer p
 
 checkPeer :: MonadManager m => Peer -> m ()
@@ -312,13 +326,9 @@ getNewPeer :: (MonadUnliftIO m, MonadManager m) => m (Maybe SockAddr)
 getNewPeer = do
     ManagerConfig {mgrConfDB = db} <- asks myConfig
     exclude <- map onlinePeerAddress <$> getOnlinePeers
-    m <-
-        runMaybeT $
+    runMaybeT $
         MaybeT (getNewPeerDB db exclude) <|>
         MaybeT (populatePeerDB >> getNewPeerDB db exclude)
-    case m of
-        Just a -> return $ Just a
-        Nothing -> return Nothing
 
 connectPeer :: (MonadUnliftIO m, MonadManager m) => SockAddr -> m ()
 connectPeer sa = do
