@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
+## 0.9.6
+### Change
+- Randomize known peers instead of keeping scores.
+- Simplify peer management code to avoid freezes.
+- Merge logic for chain and manager.
+
 ## 0.9.5
 ### Change
 - Do not record new peers in database when peer discovery is disabled.

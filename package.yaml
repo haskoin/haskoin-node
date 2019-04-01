@@ -1,5 +1,5 @@
 name: haskoin-node
-version: 0.9.5
+version: 0.9.6
 synopsis: Haskoin Node P2P library for Bitcoin and Bitcoin Cash
 description: Bitcoin and Bitcoin Cash peer-to-peer protocol library featuring headers-first synchronisation.
 category: Bitcoin, Finance, Network
@@ -17,28 +17,28 @@ dependencies:
   - base >=4.9 && <5
   - bytestring
   - cereal
+  - conduit
+  - conduit-extra
+  - containers
+  - data-default
+  - hashable
   - haskoin-core
-  - nqe
   - monad-logger
   - mtl
   - network
+  - nqe
   - random
+  - resourcet
   - rocksdb-haskell
+  - rocksdb-query
+  - string-conversions
+  - text
+  - transformers
+  - time
   - unliftio
+  - unordered-containers
 library:
   source-dirs: src
-  dependencies:
-    - conduit
-    - conduit-extra
-    - data-default
-    - hashable
-    - text
-    - time
-    - resourcet
-    - rocksdb-query
-    - string-conversions
-    - transformers
-    - unordered-containers
 tests:
   spec:
     main: Spec.hs
@@ -48,7 +48,6 @@ tests:
           hspec-discover:hspec-discover
     dependencies:
       - hspec
-      - haskoin-core
       - haskoin-node
       - HUnit
       - safe
