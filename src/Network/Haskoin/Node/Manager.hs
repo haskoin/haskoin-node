@@ -21,7 +21,6 @@ module Network.Haskoin.Node.Manager
     ) where
 
 import           Conduit
-import           Control.Applicative
 import           Control.Monad
 import           Control.Monad.Except
 import           Control.Monad.Logger
@@ -124,11 +123,11 @@ loadPeers = do
     os <- readTVarIO =<< asks onlinePeers
     ks <- readTVarIO =<< asks knownPeers
     if null os && Set.null ks
-        then $(logDebugS) "Manager" "Not initialising populated peer sets"
-        else do
+        then do
             loadStaticPeers
             d <- mgrConfDiscover <$> asks myConfig
             when d $ loadPeersFromDB >> loadNetSeeds
+        else $(logDebugS) "Manager" "Peers already available, not initialising"
 
 loadStaticPeers :: (MonadUnliftIO m, MonadManager m) => m ()
 loadStaticPeers = do
@@ -381,7 +380,7 @@ announcePeer p = do
         Nothing -> $(logErrorS) "Manager" "Will not announce unknown peer"
 
 getNewPeer :: (MonadUnliftIO m, MonadManager m) => m (Maybe SockAddr)
-getNewPeer = runMaybeT $ go <|> (lift loadPeers >> go)
+getNewPeer = runMaybeT $ lift loadPeers >> go
   where
     go = do
         b <- asks knownPeers
@@ -453,7 +452,7 @@ withPeerLoop sa p mgr = withAsync go
             threadDelay =<<
                 liftIO (randomRIO (30 * 1000 * 1000, 90 * 1000 * 1000))
             $(logDebugS) "ManagerPeerLoop" $
-                "Ping manager to check on peer " <> cs (show sa)
+                "Ping manager about peer: " <> cs (show sa)
             ManagerCheckPeer p `send` mgr
 
 withConnectLoop :: (MonadLogger m, MonadUnliftIO m) => Manager -> m a -> m a
@@ -463,7 +462,7 @@ withConnectLoop mgr act = withAsync go (\a -> link a >> act)
         forever $ do
             $(logDebugS)
                 "ManagerConnectLoop"
-                "Ping manager to connect to new peer if possible"
+                "Ping manager for housekeeping"
             ManagerConnect `send` mgr
             threadDelay =<< liftIO (randomRIO (2 * 1000 * 1000, 10 * 1000 * 1000))
 

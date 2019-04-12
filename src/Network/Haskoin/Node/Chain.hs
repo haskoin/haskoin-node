@@ -149,7 +149,8 @@ syncPeer p = do
     now <- round <$> liftIO getPOSIXTime
     gh <- syncHeaders now bb p
     $(logDebugS) "Chain" $
-        "Requesting headers from syncing peer for chain head: " <> cs (show bb)
+        "Requesting headers from syncing peer for chain head at height: " <>
+        cs (show (nodeHeight bb))
     MGetHeaders gh `sendMessage` p
 
 chainMessage :: MonadChain m => ChainMessage -> m ()
@@ -195,7 +196,7 @@ withSyncLoop ch f = withAsync go $ \a -> link a >> f
                 liftIO (randomRIO (2 * 1000 * 1000, 20 * 1000 * 1000))
             $(logDebugS)
                 "ChainSyncLoop"
-                "Pinging chain actor to run some housekeeping tasks"
+                "Ping chain for housekeeping"
             ChainPing `send` ch
 
 -- | Version of the database.
