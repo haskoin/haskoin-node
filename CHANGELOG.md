@@ -4,37 +4,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
+## 0.9.8
+### Changed
+- Increase version of haskoin-core to 0.9.0.
+- Fix some tests.
+
 ## 0.9.7
 ### Added
 - More debugging.
 
-### Change
+### Changed
 - Be defensive against duplicate peers.
 - Increase interval between housekeeping pings.
 - Replace peers in database atomically.
 
 ## 0.9.6
-### Change
+### Changed
 - Randomize known peers instead of keeping scores.
 - Simplify peer management code to avoid freezes.
 - Merge logic for chain and manager.
 
 ## 0.9.5
-### Change
+### Changed
 - Do not record new peers in database when peer discovery is disabled.
 
 ## 0.9.4
-### Change
+### Changed
 - Don't spam best block events.
 
 ## 0.9.3
-### Change
+### Changed
 - Correct display of milliseconds in log.
 - Correct bug when receiving headers from unknown peer.
 - Simplify chain syncing code.
 
 ## 0.9.2
-### Change
+### Changed
 - Peer dies immediately when receiving a bad message.
 
 ## 0.9.1
