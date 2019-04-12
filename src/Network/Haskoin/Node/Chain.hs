@@ -207,7 +207,7 @@ dataVersion = 1
 data ChainDataVersionKey = ChainDataVersionKey
     deriving (Eq, Ord, Show)
 
-instance Key ChainDataVersionKey
+instance R.Key ChainDataVersionKey
 instance KeyValue ChainDataVersionKey Word32
 
 instance Serialize ChainDataVersionKey where

@@ -489,7 +489,7 @@ instance Serialize PeerDataVersionKey where
         return PeerDataVersionKey
     put PeerDataVersionKey = S.putWord8 0x82
 
-instance Key PeerDataVersionKey
+instance R.Key PeerDataVersionKey
 instance KeyValue PeerDataVersionKey Word32
 
 instance Serialize PeerAddress where
@@ -501,7 +501,7 @@ instance Serialize PeerAddress where
         encodeSockAddr a
     put PeerAddressBase = S.putWord8 0x81
 
-instance Key PeerAddress
+instance R.Key PeerAddress
 instance KeyValue PeerAddress ()
 
 -- | Add a peer.

@@ -10,6 +10,7 @@ module Haskoin.NodeSpec
 import           Control.Monad
 import           Control.Monad.Logger
 import           Control.Monad.Trans
+import           Data.Maybe
 import qualified Database.RocksDB     as R
 import           Haskoin
 import           Haskoin.Node
@@ -41,7 +42,9 @@ spec = do
                     h2 =
                         "00000000851f278a8b2c466717184aae859af5b83c6f850666afbc349cf61577"
                 p <- waitForPeer nodeEvents
-                Just [b1, b2] <- peerGetBlocks net 30 p [h1, h2]
+                pbs <- peerGetBlocks net 30 p [h1, h2]
+                pbs `shouldSatisfy` isJust
+                let Just [b1, b2] = pbs
                 headerHash (blockHeader b1) `shouldBe` h1
                 headerHash (blockHeader b2) `shouldBe` h2
                 let testMerkle b =
