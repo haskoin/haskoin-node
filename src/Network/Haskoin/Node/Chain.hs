@@ -73,7 +73,9 @@ chain cfg inbox = do
         initChainDB net
         getBestBlockHeader >>= chainEvent . ChainBestBlock
         $(logInfoS) "Chain" "Initialization complete"
-        forever $ receive inbox >>= chainMessage
+        forever $ do
+          $(logDebugS) "Chain" "Awaiting message..."
+          receive inbox >>= chainMessage
 
 chainEvent :: MonadChain m => ChainEvent -> m ()
 chainEvent e = do
@@ -109,16 +111,19 @@ processHeaders p hs =
                     then do
                         $(logDebugS)
                             "Chain"
-                            "Finished importing headers from peer"
+                            "Finished importing headers from syncing peer"
                         MSendHeaders `sendMessage` p
                         finishPeer p
                         syncNewPeer
                         syncNotif
-                    else syncPeer p
+                    else do
+                        $(logDebugS)
+                            "Chain"
+                            "Continuing importing headers from syncing peer"
+                        syncPeer p
 
 syncNewPeer :: MonadChain m => m ()
-syncNewPeer = do
-    $(logDebugS) "Chain" "Attempting to sync against a new peer"
+syncNewPeer =
     getSyncingPeer >>= \case
         Nothing -> do
             $(logDebugS) "Chain" "Getting next peer to sync from"
@@ -135,13 +140,16 @@ syncNotif =
 
 syncPeer :: MonadChain m => Peer -> m ()
 syncPeer p = do
-    $(logInfoS) "Chain" "Syncing against selected peer"
-    bb <- chainSyncingPeer >>= \case
-        Just ChainSync {chainSyncPeer = p', chainHighest = Just g}
-            | p == p' -> return g
-        _ -> getBestBlockHeader
+    $(logInfoS) "Chain" "Syncing hedears against selected peer"
+    bb <-
+        chainSyncingPeer >>= \case
+            Just ChainSync {chainSyncPeer = p', chainHighest = Just g}
+                | p == p' -> return g
+            _ -> getBestBlockHeader
     now <- round <$> liftIO getPOSIXTime
     gh <- syncHeaders now bb p
+    $(logDebugS) "Chain" $
+        "Requesting headers from syncing peer for chain head: " <> cs (show bb)
     MGetHeaders gh `sendMessage` p
 
 chainMessage :: MonadChain m => ChainMessage -> m ()
@@ -167,6 +175,7 @@ chainMessage (ChainGetBlock h reply) =
 chainMessage (ChainIsSynced reply) =
     isSynced >>= atomically . reply
 chainMessage ChainPing = do
+    $(logDebugS) "Chain" "Housekeeping..."
     ChainConfig {chainConfTimeout = to} <- asks myReader
     now <- round <$> liftIO getPOSIXTime
     chainSyncingPeer >>= \case
@@ -183,7 +192,10 @@ withSyncLoop ch f = withAsync go $ \a -> link a >> f
     go =
         forever $ do
             threadDelay =<<
-                liftIO (randomRIO (250 * 1000, 1000 * 1000))
+                liftIO (randomRIO (2 * 1000 * 1000, 20 * 1000 * 1000))
+            $(logDebugS)
+                "ChainSyncLoop"
+                "Pinging chain actor to run some housekeeping tasks"
             ChainPing `send` ch
 
 -- | Version of the database.
@@ -284,7 +296,7 @@ initChainDB :: (MonadChainLogic a p m, MonadUnliftIO m) => Network -> m ()
 initChainDB net = do
     db <- asks myChainDB
     ver <- retrieve db def ChainDataVersionKey
-    when (ver /= Just dataVersion) purgeChainDB
+    when (ver /= Just dataVersion) $ purgeChainDB >>= writeBatch db
     R.insert db ChainDataVersionKey dataVersion
     retrieve db def BestBlockKey >>= \b ->
         when (isNothing (b :: Maybe BlockNode)) $ do
@@ -293,7 +305,7 @@ initChainDB net = do
 
 -- | Purge database of elements having keys that may conflict with those used in
 -- this module.
-purgeChainDB :: (MonadChainLogic a p m, MonadUnliftIO m) => m ()
+purgeChainDB :: (MonadChainLogic a p m, MonadUnliftIO m) => m [R.BatchOp]
 purgeChainDB = do
     db <- asks myChainDB
     runResourceT . R.withIterator db def $ \it -> do
@@ -302,13 +314,12 @@ purgeChainDB = do
   where
     recurse_delete it db =
         R.iterKey it >>= \case
-            Nothing -> return ()
             Just k
                 | B.head k == 0x90 || B.head k == 0x91 -> do
                     R.delete db def k
                     R.iterNext it
-                    recurse_delete it db
-                | otherwise -> return ()
+                    (R.Del k :) <$> recurse_delete it db
+            _ -> return []
 
 -- | Import a bunch of continuous headers. Returns 'True' if the number of
 -- headers is 2000, which means that there are possibly more headers to sync

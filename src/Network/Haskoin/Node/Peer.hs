@@ -45,8 +45,11 @@ peer ::
 peer pc inbox = withConnection a $ \ad -> runReaderT (peer_session ad) pc
   where
     a = peerConfAddress pc
-    go = forever $ receive inbox >>= dispatchMessage pc
+    go = forever $ do
+      $(logDebugS) s "Awaiting message..."
+      receive inbox >>= dispatchMessage pc
     net = peerConfNetwork pc
+    s = peerString (peerConfAddress pc)
     peer_session ad =
         let ins = appSource ad
             ons = appSink ad
@@ -66,8 +69,11 @@ dispatchMessage cfg (SendMessage msg) = do
     yield msg
 dispatchMessage cfg (GetPublisher reply) =
     atomically $ reply (peerConfListen cfg)
-dispatchMessage _ (KillPeer e) =
+dispatchMessage cfg (KillPeer e) = do
+    $(logErrorS) s $ "Killing peer via mailbox request: " <> cs (show e)
     throwIO e
+  where
+    s = peerString (peerConfAddress cfg)
 
 -- | Internal conduit to parse messages coming from peer.
 inPeerConduit ::
@@ -104,4 +110,4 @@ outPeerConduit net = awaitForever $ yield . runPut . putMessage net
 
 -- | Peer string for logging
 peerString :: SockAddr -> Text
-peerString a = "Peer{" <> cs (show a) <> "}"
+peerString a = "Peer<" <> cs (show a) <> ">"
