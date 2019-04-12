@@ -67,7 +67,10 @@ dispatchMessage cfg (SendMessage msg) = do
     $(logDebugS) (peerString (peerConfAddress cfg)) $
         "Outgoing: " <> cs (commandToString (msgType msg))
     yield msg
-dispatchMessage cfg (GetPublisher reply) =
+dispatchMessage cfg (GetPublisher reply) = do
+    $(logDebugS)
+        (peerString (peerConfAddress cfg))
+        "Replying to publisher request"
     atomically $ reply (peerConfListen cfg)
 dispatchMessage cfg (KillPeer e) = do
     $(logErrorS) s $ "Killing peer via mailbox request: " <> cs (show e)

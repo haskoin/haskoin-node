@@ -271,7 +271,9 @@ managerMessage (ManagerPeerMessage p m) = do
         "Forwarding message " <> cs cmd <> " from peer " <> s
     forwardMessage p m
 
-managerMessage (ManagerBestBlock h) = putBestBlock h
+managerMessage (ManagerBestBlock h) = do
+    $(logDebugS) "Manager" $ "Setting best block at height " <> cs (show h)
+    putBestBlock h
 
 managerMessage ManagerConnect = do
     l <- length <$> getConnectedPeers
@@ -289,12 +291,22 @@ managerMessage ManagerPurgePeers = do
     $(logWarnS) "Manager" "Purging connected peers and peer database"
     purgePeers
 
-managerMessage (ManagerGetPeers reply) =
-    getConnectedPeers >>= atomically . reply
+managerMessage (ManagerGetPeers reply) = do
+    $(logDebugS) "Manager" "Responding to request for connected peers"
+    ps <- getConnectedPeers
+    $(logDebugS) "Manager" $
+        "There are " <> cs (show (length ps)) <> " connected peers"
+    atomically $ reply ps
 
 managerMessage (ManagerGetOnlinePeer p reply) = do
+    $(logDebugS) "Manager" "Responding to request for particular peer"
     b <- asks onlinePeers
-    atomically $ findPeer b p >>= reply
+    m <- atomically $ findPeer b p >>= \o -> reply o >> return o
+    case m of
+        Nothing -> $(logDebugS) "Manager" "Requested peer not found"
+        Just o ->
+            $(logDebugS) "Manager" $
+            "Peer found at address: " <> cs (show (onlinePeerAddress o))
 
 managerMessage (ManagerCheckPeer p) = checkPeer p
 

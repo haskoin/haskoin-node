@@ -154,7 +154,8 @@ syncPeer p = do
     MGetHeaders gh `sendMessage` p
 
 chainMessage :: MonadChain m => ChainMessage -> m ()
-chainMessage (ChainGetBest reply) =
+chainMessage (ChainGetBest reply) = do
+    $(logDebugS) "Chain" "Responding to request for best block"
     getBestBlockHeader >>= atomically . reply
 chainMessage (ChainHeaders p hs) = do
     $(logDebugS) "Chain" $ "Processing " <> cs (show (length hs)) <> " headers"
@@ -167,14 +168,45 @@ chainMessage (ChainPeerDisconnected p a) = do
     $(logWarnS) "Chain" $ "Removing a peer from sync queue: " <> cs (show a)
     finishPeer p
     syncNewPeer
-chainMessage (ChainGetAncestor h n reply) =
-    getAncestor h n >>= atomically . reply
-chainMessage (ChainGetSplit r l reply) =
-    splitPoint r l >>= atomically . reply
-chainMessage (ChainGetBlock h reply) =
-    getBlockHeader h >>= atomically . reply
-chainMessage (ChainIsSynced reply) =
-    isSynced >>= atomically . reply
+chainMessage (ChainGetAncestor h n reply) = do
+    $(logDebugS) "Chain" $
+        "Responding to request for ancestor at height " <> cs (show h) <>
+        " to block: " <>
+        blockHashToHex (headerHash (nodeHeader n))
+    a <- getAncestor h n
+    atomically $ reply a
+    case a of
+        Just b ->
+            $(logDebugS) "Chain" $
+            "Ancestor is: " <> blockHashToHex (headerHash (nodeHeader b))
+        Nothing -> $(logDebugS) "Chain" "Ancestor not found"
+chainMessage (ChainGetSplit l r reply) = do
+    $(logDebugS) "Chain" $
+        "Responding to request for split point between blocks " <>
+        blockHashToHex (headerHash (nodeHeader l)) <>
+        " & " <>
+        blockHashToHex (headerHash (nodeHeader r))
+    s <- splitPoint l r
+    atomically $ reply s
+    $(logDebugS) "Chain" $
+        "Split block is: " <> blockHashToHex (headerHash (nodeHeader s))
+chainMessage (ChainGetBlock h reply) = do
+    $(logDebugS) "Chain" $
+        "Responding to request for block: " <> blockHashToHex h
+    m <- getBlockHeader h
+    atomically $ reply m
+    case m of
+        Nothing ->
+            $(logDebugS) "Chain" $ "Block not found: " <> blockHashToHex h
+        Just b ->
+            $(logDebugS) "Chain" $
+            "Block found at height " <> cs (show (nodeHeight b))
+chainMessage (ChainIsSynced reply) = do
+    s <- isSynced
+    if s
+        then $(logDebugS) "Chain" "Chain is in sync"
+        else $(logDebugS) "Chain" "Chain is NOT in sync"
+    atomically $ reply s
 chainMessage ChainPing = do
     $(logDebugS) "Chain" "Housekeeping..."
     ChainConfig {chainConfTimeout = to} <- asks myReader
