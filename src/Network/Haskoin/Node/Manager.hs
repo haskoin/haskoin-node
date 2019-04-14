@@ -103,7 +103,6 @@ manager cfg inbox =
             forever $ do
                 $(logDebugS) "Manager" "Awaiting message..."
                 m <- receive inbox
-                $(logDebugS) "Manager" "Processing message.."
                 managerMessage m
     f (a, mex) = ManagerPeerDied a mex `sendSTM` mgr
 
