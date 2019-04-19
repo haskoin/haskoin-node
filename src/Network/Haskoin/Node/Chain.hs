@@ -155,8 +155,13 @@ syncPeer p = do
 
 chainMessage :: MonadChain m => ChainMessage -> m ()
 chainMessage (ChainGetBest reply) = do
-    $(logDebugS) "Chain" "Responding to request for best block"
-    getBestBlockHeader >>= atomically . reply
+    $(logDebugS) "Chain" "Responding to request for best block header"
+    getBestBlockHeader >>= \bh -> do
+        $(logDebugS) "Chain" $
+            "Best block header: " <> blockHashToHex (headerHash (nodeHeader bh)) <>
+            " at height " <>
+            cs (show (nodeHeight bh))
+        atomically $ reply bh
 chainMessage (ChainHeaders p hs) = do
     $(logDebugS) "Chain" $ "Processing " <> cs (show (length hs)) <> " headers"
     processHeaders p hs
