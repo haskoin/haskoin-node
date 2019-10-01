@@ -1,8 +1,6 @@
-resolver: lts-13.20
+resolver: lts-14.7
 nix:
   packages:
     - rocksdb
     - secp256k1
     - zlib
-extra-deps:
-  - haskoin-core-0.9.0
