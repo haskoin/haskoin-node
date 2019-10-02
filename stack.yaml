@@ -4,3 +4,5 @@ nix:
     - rocksdb
     - secp256k1
     - zlib
+extra-deps:
+  - haskoin-core-0.9.1
