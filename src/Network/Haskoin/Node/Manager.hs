@@ -87,7 +87,7 @@ manager cfg inbox =
                     , knownPeers = kp
                     , onlinePeers = ob
                     }
-        (go `finally` storePeersInDB) `runReaderT` rd
+        go `runReaderT` rd
   where
     mgr = inboxToMailbox inbox
     discover = mgrConfDiscover cfg
@@ -236,6 +236,7 @@ managerMessage (ManagerPeerMessage p (MAddr (Addr nas))) = do
         True -> do
             let sas = map (naAddress . snd) nas
             forM_ sas newPeer
+            storePeersInDB
         False ->
             $(logDebugS)
                 "Manager"
