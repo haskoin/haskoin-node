@@ -129,7 +129,7 @@ syncNewPeer =
             $(logDebugS) "Chain" "Getting next peer to sync from"
             nextPeer >>= \case
                 Nothing ->
-                    $(logInfoS) "Chain" "Finished syncing against all peers"
+                    $(logDebugS) "Chain" "Finished syncing against all peers"
                 Just p -> syncPeer p
         Just _ -> $(logDebugS) "Chain" "Already syncing against a peer"
 
@@ -140,7 +140,7 @@ syncNotif =
 
 syncPeer :: MonadChain m => Peer -> m ()
 syncPeer p = do
-    $(logInfoS) "Chain" "Syncing hedears against selected peer"
+    $(logDebugS) "Chain" "Syncing headers against selected peer"
     bb <-
         chainSyncingPeer >>= \case
             Just ChainSync {chainSyncPeer = p', chainHighest = Just g}
