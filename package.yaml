@@ -39,8 +39,6 @@ dependencies:
   - unordered-containers
 library:
   source-dirs: src
-  ghc-options:
-    - -O2
 tests:
   spec:
     main: Spec.hs
