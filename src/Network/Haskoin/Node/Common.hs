@@ -109,8 +109,6 @@ data NodeConfig = NodeConfig
 data ManagerConfig = ManagerConfig
     { mgrConfMaxPeers :: !Int
       -- ^ maximum number of peers to connect to
-    , mgrConfDB       :: !DB
-      -- ^ database handler to store peer information
     , mgrConfPeers    :: ![HostPort]
       -- ^ static list of peers to connect to
     , mgrConfDiscover :: !Bool
@@ -133,8 +131,6 @@ data ManagerMessage
       -- ^ get all connected peers
     | ManagerGetOnlinePeer !Peer !(Listen (Maybe OnlinePeer))
       -- ^ get a peer information
-    | ManagerPurgePeers
-      -- ^ delete all known peers
     | ManagerCheckPeer !Peer
       -- ^ check this peer
     | ManagerPeerMessage !Peer !Message
@@ -234,8 +230,6 @@ data PeerException
       -- ^ peer has no segwit support
     | PeerTimeout
       -- ^ request to peer timed out
-    | PurgingPeer
-      -- ^ peers are being purged
     | UnknownPeer
       -- ^ peer is unknown
     deriving (Eq, Show)

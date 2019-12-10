@@ -83,7 +83,6 @@ node cfg mgr_inbox ch_inbox = do
     let mgr_config =
             ManagerConfig
                 { mgrConfMaxPeers = nodeConfMaxPeers cfg
-                , mgrConfDB = nodeConfDB cfg
                 , mgrConfPeers = nodeConfPeers cfg
                 , mgrConfDiscover = nodeConfDiscover cfg
                 , mgrConfNetAddr = nodeConfNetAddr cfg

@@ -40,9 +40,6 @@ import           Data.Text                   (Text)
 import           Data.Time.Clock
 import           Data.Time.Clock.POSIX
 import           Data.Word
-import           Database.RocksDB            (DB)
-import qualified Database.RocksDB            as R
-import           Database.RocksDB.Query      as R
 import           Haskoin
 import           Network.Haskoin.Node.Common
 import           Network.Haskoin.Node.Peer
@@ -92,9 +89,7 @@ manager cfg inbox =
     mgr = inboxToMailbox inbox
     discover = mgrConfDiscover cfg
     go = do
-        db <- getManagerDB
         $(logDebugS) "Manager" "Initializing..."
-        initPeerDB db discover
         putBestBlock <=< receiveMatch inbox $ \case
             ManagerBestBlock b -> Just b
             _ -> Nothing
@@ -125,7 +120,7 @@ loadPeers = do
         then do
             loadStaticPeers
             d <- mgrConfDiscover <$> asks myConfig
-            when d $ loadPeersFromDB >> loadNetSeeds
+            when d loadNetSeeds
         else $(logDebugS) "Manager" "Peers already available, not initialising"
 
 loadStaticPeers :: (MonadUnliftIO m, MonadManager m) => m ()
@@ -133,30 +128,6 @@ loadStaticPeers = do
     $(logDebugS) "Manager" "Loading static peers"
     xs <- mgrConfPeers <$> asks myConfig
     mapM_ newPeer =<< concat <$> mapM toSockAddr xs
-
-loadPeersFromDB :: (MonadUnliftIO m, MonadManager m) => m ()
-loadPeersFromDB = do
-    $(logDebugS) "Manager" "Loading peers from database"
-    db <- getManagerDB
-    xs <- matchingAsList db R.defaultReadOptions PeerAddressBase
-    let f (PeerAddress x, ()) = x
-        f _ = undefined
-        ys = map f xs
-    $(logInfoS) "Manager" $
-        "Loaded " <> cs (show (length ys)) <> " peers from database"
-    mapM_ newPeer ys
-
-storePeersInDB :: (MonadUnliftIO m, MonadManager m) => m ()
-storePeersInDB = do
-    db <- getManagerDB
-    os <- readTVarIO =<< asks onlinePeers
-    ks <- readTVarIO =<< asks knownPeers
-    let ps = map onlinePeerAddress os <> Set.toList ks
-        xs = map ((`insertOp` ()) . PeerAddress) ps
-    unless (null xs) $ do
-        $(logInfoS) "Manager" $
-            "Storing " <> cs (show (length xs)) <> " peers in database"
-        writeBatch db =<< (++ xs) <$> purgePeerDB db
 
 loadNetSeeds :: (MonadUnliftIO m, MonadManager m) => m ()
 loadNetSeeds = do
@@ -173,21 +144,11 @@ logConnectedPeers = do
     $(logInfoS) "Manager" $
         "Peers connected: " <> cs (show l) <> "/" <> cs (show m)
 
-getManagerDB :: MonadManager m => m DB
-getManagerDB = mgrConfDB <$> asks myConfig
-
 getOnlinePeers :: MonadManager m => m [OnlinePeer]
 getOnlinePeers = asks onlinePeers >>= readTVarIO
 
 getConnectedPeers :: MonadManager m => m [OnlinePeer]
 getConnectedPeers = filter onlinePeerConnected <$> getOnlinePeers
-
-purgePeers :: (MonadUnliftIO m, MonadManager m) => m ()
-purgePeers = do
-    db <- getManagerDB
-    ops <- getOnlinePeers
-    forM_ ops $ \OnlinePeer {onlinePeerMailbox = p} -> killPeer PurgingPeer p
-    writeBatch db =<< purgePeerDB db
 
 forwardMessage :: MonadManager m => Peer -> Message -> m ()
 forwardMessage p = managerEvent . PeerMessage p
@@ -236,7 +197,6 @@ managerMessage (ManagerPeerMessage p (MAddr (Addr nas))) = do
         True -> do
             let sas = map (naAddress . snd) nas
             forM_ sas newPeer
-            storePeersInDB
         False ->
             $(logDebugS)
                 "Manager"
@@ -286,10 +246,6 @@ managerMessage ManagerConnect = do
         else $(logDebugS) "Manager" "Enough peers connected."
 
 managerMessage (ManagerPeerDied a e) = processPeerOffline a e
-
-managerMessage ManagerPurgePeers = do
-    $(logWarnS) "Manager" "Purging connected peers and peer database"
-    purgePeers
 
 managerMessage (ManagerGetPeers reply) = do
     $(logDebugS) "Manager" "Responding to request for connected peers"
@@ -482,40 +438,6 @@ withConnectLoop mgr act = withAsync go (\a -> link a >> act)
 versionPeerDB :: Word32
 versionPeerDB = 5
 
--- | Peer address key in database.
-data PeerAddress
-    = PeerAddress {
-        getPeerAddress :: !SockAddr
-        -- ^ peer network address and port
-        }
-    | PeerAddressBase
-    deriving (Eq, Ord, Show)
-
--- | Database version key.
-data PeerDataVersionKey = PeerDataVersionKey
-    deriving (Eq, Ord, Show)
-
-instance Serialize PeerDataVersionKey where
-    get = do
-        guard . (== 0x82) =<< S.getWord8
-        return PeerDataVersionKey
-    put PeerDataVersionKey = S.putWord8 0x82
-
-instance R.Key PeerDataVersionKey
-instance KeyValue PeerDataVersionKey Word32
-
-instance Serialize PeerAddress where
-    get = do
-        guard . (== 0x81) =<< S.getWord8
-        PeerAddress <$> decodeSockAddr
-    put PeerAddress {getPeerAddress = a} = do
-        S.putWord8 0x81
-        encodeSockAddr a
-    put PeerAddressBase = S.putWord8 0x81
-
-instance R.Key PeerAddress
-instance KeyValue PeerAddress ()
-
 -- | Add a peer.
 newPeer :: (MonadIO m, MonadManager m) => SockAddr -> m ()
 newPeer sa = do
@@ -524,66 +446,9 @@ newPeer sa = do
     i <- atomically $ findPeerAddress o sa
     when (isNothing i) $ atomically . modifyTVar b $ Set.insert sa
 
--- | Initialize peer database, purging it of conflicting records if version
--- doesn't match current one, or if peer discovery is disabled.
-initPeerDB :: MonadUnliftIO m => DB -> Bool -> m ()
-initPeerDB db discover = do
-    ver <- retrieve db def PeerDataVersionKey
-    when (ver /= Just versionPeerDB || not discover) $
-        writeBatch db =<< purgePeerDB db
-    R.insert db PeerDataVersionKey versionPeerDB
-
--- | Purge peer records from database.
-purgePeerDB :: MonadUnliftIO m => DB -> m [R.BatchOp]
-purgePeerDB db = (++) <$> purge_byte 0x81 <*> purge_byte 0x83
-  where
-    purge_byte byte =
-        U.runResourceT . R.withIterator db def $ \it -> do
-            R.iterSeek it $ B.singleton byte
-            recurse_delete it byte
-    recurse_delete it byte =
-        R.iterKey it >>= \case
-            Just k
-                | B.head k == byte -> do
-                    R.iterNext it
-                    (R.Del k :) <$> recurse_delete it byte
-            _ -> return []
-
 -- | Get static network seeds.
 networkSeeds :: Network -> [HostPort]
 networkSeeds net = map (, getDefaultPort net) (getSeeds net)
-
--- | Serialize a network address/port.
-encodeSockAddr :: SockAddr -> Put
-encodeSockAddr (SockAddrInet6 p _ (a, b, c, d) _) = do
-    S.putWord32be a
-    S.putWord32be b
-    S.putWord32be c
-    S.putWord32be d
-    S.putWord16be (fromIntegral p)
-encodeSockAddr (SockAddrInet p a) = do
-    S.putWord32be 0x00000000
-    S.putWord32be 0x00000000
-    S.putWord32be 0x0000ffff
-    S.putWord32host a
-    S.putWord16be (fromIntegral p)
-encodeSockAddr x = error $ "Could not encode address: " <> show x
-
--- | Deserialize a network address/port.
-decodeSockAddr :: Get SockAddr
-decodeSockAddr = do
-    a <- S.getWord32be
-    b <- S.getWord32be
-    c <- S.getWord32be
-    if a == 0x00000000 && b == 0x00000000 && c == 0x0000ffff
-        then do
-            d <- S.getWord32host
-            p <- S.getWord16be
-            return $ SockAddrInet (fromIntegral p) d
-        else do
-            d <- S.getWord32be
-            p <- S.getWord16be
-            return $ SockAddrInet6 (fromIntegral p) 0 (a, b, c, d) 0
 
 -- | Report receiving a pong from a connected peer. Will store ping roundtrip
 -- time in a window of latest eleven. Peers are returned by the manager in order
