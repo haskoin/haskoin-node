@@ -1,4 +1,4 @@
-resolver: lts-14.19
+resolver: lts-14.20
 nix:
   packages:
     - rocksdb
@@ -6,4 +6,6 @@ nix:
     - zlib
     - pkg-config
 extra-deps:
-  - haskoin-core-0.9.7
+  - secp256k1-haskell-0.1.8
+  - haskoin-core-0.10.0
+  - rocksdb-query-0.3.1

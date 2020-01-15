@@ -27,12 +27,8 @@ import           Control.Monad.Logger
 import           Control.Monad.Reader
 import           Control.Monad.Trans.Maybe
 import           Data.Bits
-import qualified Data.ByteString             as B
-import           Data.Default
 import           Data.List
 import           Data.Maybe
-import           Data.Serialize              (Get, Put, Serialize)
-import           Data.Serialize              as S
 import           Data.Set                    (Set)
 import qualified Data.Set                    as Set
 import           Data.String.Conversions
@@ -48,7 +44,6 @@ import           NQE
 import           System.Random
 import           UnliftIO
 import           UnliftIO.Concurrent
-import           UnliftIO.Resource           as U
 
 -- | Monad used by most functions in this module.
 type MonadManager m = (MonadLoggerIO m, MonadReader ManagerReader m)
@@ -195,7 +190,7 @@ managerMessage (ManagerPeerMessage p (MAddr (Addr nas))) = do
         "Received " <> cs (show n) <> " addresses from peer " <> s
     mgrConfDiscover <$> asks myConfig >>= \case
         True -> do
-            let sas = map (naAddress . snd) nas
+            let sas = map (hostToSockAddr . naAddress . snd) nas
             forM_ sas newPeer
         False ->
             $(logDebugS)
@@ -380,7 +375,7 @@ connectPeer sa = do
             nonce <- liftIO randomIO
             bb <- getBestBlock
             now <- round <$> liftIO getPOSIXTime
-            let rmt = NetworkAddress (srv net) sa
+            let rmt = NetworkAddress (srv net) (sockToHostAddress sa)
                 ver = buildVersion net nonce bb ad rmt now
             (inbox, p) <- newMailbox
             let pc pub =
