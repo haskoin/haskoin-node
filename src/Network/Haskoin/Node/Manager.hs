@@ -132,36 +132,35 @@ getBestBlock :: MonadManager m => m BlockHeight
 getBestBlock = asks myBestBlock >>= readTVarIO
 
 getNetwork :: MonadManager m => m Network
-getNetwork = mgrConfNetwork <$> asks myConfig
+getNetwork = asks (mgrConfNetwork . myConfig)
 
 loadPeers :: (MonadUnliftIO m, MonadManager m) => m ()
 loadPeers = do
-    os <- readTVarIO =<< asks onlinePeers
-    ks <- readTVarIO =<< asks knownPeers
-    if null os && Set.null ks
-        then do
-            loadStaticPeers
-            d <- mgrConfDiscover <$> asks myConfig
-            when d loadNetSeeds
-        else $(logDebugS) "Manager" "Peers already available, not initialising"
+    loadStaticPeers
+    loadNetSeeds
 
 loadStaticPeers :: (MonadUnliftIO m, MonadManager m) => m ()
 loadStaticPeers = do
     $(logDebugS) "Manager" "Loading static peers"
-    xs <- mgrConfPeers <$> asks myConfig
+    xs <- asks (mgrConfPeers . myConfig)
     mapM_ newPeer =<< concat <$> mapM toSockAddr xs
 
 loadNetSeeds :: (MonadUnliftIO m, MonadManager m) => m ()
-loadNetSeeds = do
-    net <- getNetwork
-    $(logDebugS) "Manager" "Loading network seeds"
-    ss <- concat <$> mapM toSockAddr (networkSeeds net)
-    $(logDebugS) "Manager" $ "Adding " <> cs (show (length ss)) <> " seed peers"
-    mapM_ newPeer ss
+loadNetSeeds =
+    asks (mgrConfDiscover . myConfig) >>= \discover ->
+        if discover
+            then do
+                net <- getNetwork
+                $(logDebugS) "Manager" "Loading network seeds"
+                ss <- concat <$> mapM toSockAddr (networkSeeds net)
+                $(logDebugS) "Manager" $
+                    "Adding " <> cs (show (length ss)) <> " seed peers"
+                mapM_ newPeer ss
+            else $(logDebugS) "Manager" "Peer discovery disabled"
 
 logConnectedPeers :: MonadManager m => m ()
 logConnectedPeers = do
-    m <- mgrConfMaxPeers <$> asks myConfig
+    m <- asks (mgrConfMaxPeers . myConfig)
     l <- length <$> getConnectedPeers
     $(logInfoS) "Manager" $
         "Peers connected: " <> cs (show l) <> "/" <> cs (show m)
@@ -176,7 +175,7 @@ forwardMessage :: MonadManager m => Peer -> Message -> m ()
 forwardMessage p = managerEvent . PeerMessage p
 
 managerEvent :: MonadManager m => PeerEvent -> m ()
-managerEvent e = mgrConfEvents <$> asks myConfig >>= \l -> atomically $ l e
+managerEvent e = asks (mgrConfEvents . myConfig) >>= \l -> atomically $ l e
 
 managerMessage :: (MonadUnliftIO m, MonadManager m) => ManagerMessage -> m ()
 managerMessage (ManagerPeerMessage p (MVersion v)) = do
@@ -215,14 +214,14 @@ managerMessage (ManagerPeerMessage p (MAddr (Addr nas))) = do
     let n = length nas
     $(logDebugS) "Manager" $
         "Received " <> cs (show n) <> " addresses from peer " <> s
-    mgrConfDiscover <$> asks myConfig >>= \case
-        True -> do
-            let sas = map (hostToSockAddr . naAddress . snd) nas
-            forM_ sas newPeer
-        False ->
-            $(logDebugS)
-                "Manager"
-                "Ignoring received peers (discovery disabled)"
+    asks (mgrConfDiscover . myConfig) >>= \discover ->
+        if discover
+            then do
+                let sas = map (hostToSockAddr . naAddress . snd) nas
+                forM_ sas newPeer
+            else $(logDebugS)
+                     "Manager"
+                     "Ignoring new peers since peer discovery disabled"
 
 managerMessage (ManagerPeerMessage p m@(MPong (Pong n))) = do
     now <- liftIO getCurrentTime
@@ -259,13 +258,13 @@ managerMessage (ManagerBestBlock h) = do
 
 managerMessage ManagerConnect = do
     l <- length <$> getConnectedPeers
-    x <- mgrConfMaxPeers <$> asks myConfig
+    x <- asks (mgrConfMaxPeers . myConfig)
     if l < x
         then getNewPeer >>= \case
                  Nothing ->
-                     $(logDebugS) "Manager" "No peers available to connect"
+                     $(logDebugS) "Manager" "No other peers available to connect"
                  Just sa -> connectPeer sa
-        else $(logDebugS) "Manager" "Enough peers connected."
+        else $(logDebugS) "Manager" "Enough peers connected"
 
 managerMessage (ManagerPeerDied a e) = processPeerOffline a e
 

@@ -276,7 +276,7 @@ data PeerMessage
     | KillPeer !PeerException
     | SendMessage !Message
 
--- | Resolve a host and port to a list of 'SockAddr'. May make use DNS resolver.
+-- | Resolve a host and port to a list of 'SockAddr'. May do DNS lookups.
 toSockAddr :: MonadUnliftIO m => HostPort -> m [SockAddr]
 toSockAddr (host, port) = go `catch` e
   where
