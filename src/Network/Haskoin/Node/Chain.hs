@@ -22,7 +22,8 @@ module Network.Haskoin.Node.Chain
     ( chain
     ) where
 
-import           Control.Monad               (forever, guard, void, when)
+import           Control.Monad               (forever, guard, unless, void,
+                                              when)
 import           Control.Monad.Except        (runExceptT, throwError)
 import           Control.Monad.Logger        (MonadLoggerIO, logErrorS,
                                               logInfoS)
@@ -105,7 +106,7 @@ processHeaders ::
 processHeaders p hs =
     void . runMaybeT $ do
         net <- chainConfNetwork <$> asks myReader
-        $(logInfoS) "Chain" $
+        unless (null hs) . $(logInfoS) "Chain" $
             "Importing " <> cs (show (length hs)) <> " headers"
         now <- round <$> liftIO getPOSIXTime
         pbest <- getBestBlockHeader
