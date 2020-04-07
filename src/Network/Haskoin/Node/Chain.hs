@@ -89,12 +89,12 @@ chain cfg inbox = do
     db = chainConfDB cfg
     ch = inboxToMailbox inbox
     run = do
-        $(logDebugS) "Chain" "Initializing..."
+        $(logDebugS) "Chain" "Initializing"
         initChainDB net
         getBestBlockHeader >>= chainEvent . ChainBestBlock
         $(logInfoS) "Chain" "Initialization complete"
         forever $ do
-          $(logDebugS) "Chain" "Awaiting message..."
+          $(logDebugS) "Chain" "Awaiting message"
           receive inbox >>= chainMessage
 
 chainEvent :: MonadChain m => ChainEvent -> m ()

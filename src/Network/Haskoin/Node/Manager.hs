@@ -111,14 +111,14 @@ manager cfg inbox =
   where
     mgr = inboxToMailbox inbox
     go = do
-        $(logDebugS) "Manager" "Initializing..."
+        $(logDebugS) "Manager" "Initializing"
         putBestBlock <=< receiveMatch inbox $ \case
             ManagerBestBlock b -> Just b
             _ -> Nothing
         $(logDebugS) "Manager" "Initialization complete"
         withConnectLoop mgr $
             forever $ do
-                $(logDebugS) "Manager" "Awaiting message..."
+                $(logDebugS) "Manager" "Awaiting message"
                 m <- receive inbox
                 managerMessage m
     f (a, mex) = ManagerPeerDied a mex `sendSTM` mgr
@@ -445,8 +445,8 @@ withPeerLoop sa p mgr = withAsync go
         forever $ do
             threadDelay =<<
                 liftIO (randomRIO (30 * 1000 * 1000, 90 * 1000 * 1000))
-            $(logDebugS) "ManagerPeerLoop" $
-                "Ping manager about peer: " <> cs (show sa)
+            $(logDebugS) "Manager" $
+                "Ping manager for peer housekeeping: " <> cs (show sa)
             ManagerCheckPeer p `send` mgr
 
 withConnectLoop :: (MonadLogger m, MonadUnliftIO m) => Manager -> m a -> m a
@@ -454,11 +454,10 @@ withConnectLoop mgr act = withAsync go (\a -> link a >> act)
   where
     go =
         forever $ do
-            $(logDebugS)
-                "ManagerConnectLoop"
-                "Ping manager for housekeeping"
+            threadDelay =<<
+                liftIO (randomRIO (2 * 1000 * 1000, 10 * 1000 * 1000))
+            $(logDebugS) "Manager" "Ping manager for general housekeeping"
             ManagerConnect `send` mgr
-            threadDelay =<< liftIO (randomRIO (2 * 1000 * 1000, 10 * 1000 * 1000))
 
 -- | Add a peer.
 newPeer :: (MonadIO m, MonadManager m) => SockAddr -> m ()

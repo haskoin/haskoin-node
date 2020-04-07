@@ -55,7 +55,7 @@ peer pc inbox = withConnection a $ \ad -> runReaderT (peer_session ad) pc
   where
     a = peerConfAddress pc
     go = forever $ do
-      $(logDebugS) s "Awaiting message..."
+      $(logDebugS) s "Awaiting message"
       receive inbox >>= dispatchMessage pc
     net = peerConfNetwork pc
     s = peerString (peerConfAddress pc)
