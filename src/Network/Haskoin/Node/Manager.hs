@@ -10,7 +10,7 @@
 Module      : Network.Haskoin.Node.Manager
 Copyright   : No rights reserved
 License     : UNLICENSE
-Maintainer  : xenog@protonmail.com
+Maintainer  : jprupp@protonmail.ch
 Stability   : experimental
 Portability : POSIX
 
@@ -20,30 +20,58 @@ module Network.Haskoin.Node.Manager
     ( manager
     ) where
 
-import           Conduit
-import           Control.Monad
-import           Control.Monad.Except
-import           Control.Monad.Logger
-import           Control.Monad.Reader
-import           Control.Monad.Trans.Maybe
-import           Data.Bits
-import           Data.List
-import           Data.Maybe
+import           Control.Monad               (forM_, forever, guard, when,
+                                              (<=<))
+import           Control.Monad.Except        (ExceptT (..), runExceptT,
+                                              throwError)
+import           Control.Monad.Logger        (MonadLogger, MonadLoggerIO,
+                                              logDebugS, logErrorS, logInfoS,
+                                              logWarnS)
+import           Control.Monad.Reader        (MonadReader, asks, runReaderT)
+import           Control.Monad.Trans         (lift)
+import           Control.Monad.Trans.Maybe   (MaybeT (..), runMaybeT)
+import           Data.Bits                   ((.&.))
+import           Data.List                   (find, nub, sort)
+import           Data.Maybe                  (isJust, isNothing)
 import           Data.Set                    (Set)
 import qualified Data.Set                    as Set
-import           Data.String.Conversions
+import           Data.String.Conversions     (cs)
 import           Data.Text                   (Text)
-import           Data.Time.Clock
-import           Data.Time.Clock.POSIX
-import           Data.Word
-import           Haskoin
-import           Network.Haskoin.Node.Common
-import           Network.Haskoin.Node.Peer
+import           Data.Time.Clock             (NominalDiffTime, UTCTime,
+                                              diffUTCTime)
+import           Data.Time.Clock.POSIX       (getCurrentTime, getPOSIXTime)
+import           Data.Word                   (Word64)
+import           Haskoin                     (Addr (..), BlockHeight,
+                                              Message (..), Network (..),
+                                              NetworkAddress (..), Ping (..),
+                                              Pong (..), VarString (..),
+                                              Version (..), commandToString,
+                                              hostToSockAddr, msgType,
+                                              nodeNetwork, sockToHostAddress)
+import           Network.Haskoin.Node.Common (HostPort, Manager,
+                                              ManagerConfig (..),
+                                              ManagerMessage (..),
+                                              OnlinePeer (..), Peer,
+                                              PeerConfig (..), PeerEvent (..),
+                                              PeerException (..), buildVersion,
+                                              killPeer, managerCheck,
+                                              sendMessage, toSockAddr)
+import           Network.Haskoin.Node.Peer   (peer)
 import           Network.Socket              (SockAddr (..))
-import           NQE
-import           System.Random
-import           UnliftIO
-import           UnliftIO.Concurrent
+import           NQE                         (Child, Inbox, Strategy (..),
+                                              Supervisor, addChild,
+                                              inboxToMailbox, newMailbox,
+                                              receive, receiveMatch, send,
+                                              sendSTM, subscribe, unsubscribe,
+                                              withPublisher, withSupervisor)
+import           System.Random               (randomIO, randomRIO)
+import           UnliftIO                    (Async, MonadIO, MonadUnliftIO,
+                                              STM, SomeException, TVar,
+                                              atomically, bracket, liftIO, link,
+                                              modifyTVar, newTVarIO, readTVar,
+                                              readTVarIO, withAsync,
+                                              withRunInIO, writeTVar)
+import           UnliftIO.Concurrent         (threadDelay)
 
 -- | Monad used by most functions in this module.
 type MonadManager m = (MonadLoggerIO m, MonadReader ManagerReader m)
@@ -82,7 +110,6 @@ manager cfg inbox =
         go `runReaderT` rd
   where
     mgr = inboxToMailbox inbox
-    discover = mgrConfDiscover cfg
     go = do
         $(logDebugS) "Manager" "Initializing..."
         putBestBlock <=< receiveMatch inbox $ \case
@@ -267,6 +294,11 @@ checkPeer p = do
     b <- asks onlinePeers
     s <- atomically $ peerString b p
     $(logDebugS) "Manager" $ "Checking on peer " <> s
+    atomically (findPeer b p) >>= \case
+        Nothing -> return ()
+        Just o -> do
+            now <- round <$> liftIO getPOSIXTime
+            when (onlinePeerConnectTime o < now - 1800) (killPeer PeerTooOld p)
     atomically (lastPing b p) >>= \case
         Nothing -> pingPeer p
         Just t -> do
@@ -387,7 +419,7 @@ connectPeer sa = do
             a <- withRunInIO $ \io -> sup `addChild` io (launch mgr pc inbox p)
             MVersion ver `sendMessage` p
             b <- asks onlinePeers
-            _ <- atomically $ newOnlinePeer b sa nonce p a
+            _ <- atomically $ newOnlinePeer b sa nonce p a now
             return ()
   where
     l mgr p m = ManagerPeerMessage p m `sendSTM` mgr
@@ -428,10 +460,6 @@ withConnectLoop mgr act = withAsync go (\a -> link a >> act)
                 "Ping manager for housekeeping"
             ManagerConnect `send` mgr
             threadDelay =<< liftIO (randomRIO (2 * 1000 * 1000, 10 * 1000 * 1000))
-
--- | Database version.
-versionPeerDB :: Word32
-versionPeerDB = 5
 
 -- | Add a peer.
 newPeer :: (MonadIO m, MonadManager m) => SockAddr -> m ()
@@ -529,8 +557,10 @@ newOnlinePeer ::
        -- ^ peer mailbox
     -> Async ()
        -- ^ peer asynchronous handle
+    -> Word64
+       -- ^ when connection was established
     -> STM OnlinePeer
-newOnlinePeer b sa n p a = do
+newOnlinePeer b sa n p a t = do
     let op =
             OnlinePeer
                 { onlinePeerAddress = sa
@@ -542,6 +572,7 @@ newOnlinePeer b sa n p a = do
                 , onlinePeerNonce = n
                 , onlinePeerPings = []
                 , onlinePeerPing = Nothing
+                , onlinePeerConnectTime = t
                 }
     insertPeer b op
     return op

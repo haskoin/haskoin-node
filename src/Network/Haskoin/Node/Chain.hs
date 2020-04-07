@@ -12,7 +12,7 @@
 Module      : Network.Haskoin.Node.Chain
 Copyright   : No rights reserved
 License     : UNLICENSE
-Maintainer  : xenog@protonmail.com
+Maintainer  : jprupp@protonmail.ch
 Stability   : experimental
 Portability : POSIX
 
@@ -22,28 +22,48 @@ module Network.Haskoin.Node.Chain
     ( chain
     ) where
 
-import           Control.Monad.Except
-import           Control.Monad.Logger
-import           Control.Monad.Reader
-import           Control.Monad.Trans.Maybe
-import qualified Data.ByteString                  as B
-import           Data.Default
-import           Data.List
-import           Data.Maybe
-import           Data.Serialize                   as S
-import           Data.String.Conversions
-import           Data.Time.Clock.POSIX
-import           Data.Word
-import           Database.RocksDB                 (DB)
-import qualified Database.RocksDB                 as R
-import           Database.RocksDB.Query           as R
-import           Haskoin
-import           Network.Haskoin.Node.Common
-import           NQE
-import           System.Random
-import           UnliftIO
-import           UnliftIO.Concurrent
-import           UnliftIO.Resource
+import           Control.Monad               (forever, guard, void, when)
+import           Control.Monad.Except        (runExceptT, throwError)
+import           Control.Monad.Logger        (MonadLoggerIO, logDebugS,
+                                              logErrorS, logInfoS, logWarnS)
+import           Control.Monad.Reader        (MonadReader, asks, runReaderT)
+import           Control.Monad.Trans         (lift)
+import           Control.Monad.Trans.Maybe   (MaybeT (..), runMaybeT)
+import qualified Data.ByteString             as B
+import           Data.Default                (def)
+import           Data.List                   (delete, nub)
+import           Data.Maybe                  (isJust, isNothing, listToMaybe)
+import           Data.Serialize              (Serialize, get, getWord8, put,
+                                              putWord8)
+import           Data.String.Conversions     (cs)
+import           Data.Time.Clock.POSIX       (getPOSIXTime)
+import           Data.Word                   (Word32)
+import           Database.RocksDB            (DB)
+import qualified Database.RocksDB            as R
+import           Database.RocksDB.Query      (Key, KeyValue, insert, insertOp,
+                                              retrieve, writeBatch)
+import           Haskoin                     (BlockHash, BlockHeader (..),
+                                              BlockHeaders (..), BlockNode (..),
+                                              GetHeaders (..), Message (..),
+                                              Network, Timestamp,
+                                              blockHashToHex, blockLocator,
+                                              connectBlocks, genesisNode,
+                                              getAncestor, headerHash,
+                                              splitPoint)
+import           Network.Haskoin.Node.Common (Chain, ChainConfig (..),
+                                              ChainEvent (..),
+                                              ChainMessage (..), Peer,
+                                              PeerException (..), killPeer,
+                                              myVersion, sendMessage)
+import           NQE                         (Inbox, inboxToMailbox, receive,
+                                              send)
+import           System.Random               (randomRIO)
+import           UnliftIO                    (MonadIO, MonadUnliftIO, TVar,
+                                              atomically, liftIO, link,
+                                              modifyTVar, newTVarIO, readTVar,
+                                              readTVarIO, withAsync, writeTVar)
+import           UnliftIO.Concurrent         (threadDelay)
+import           UnliftIO.Resource           (runResourceT)
 
 type MonadChain m
      = (MonadLoggerIO m, MonadChainLogic ChainConfig Peer m)
@@ -244,14 +264,14 @@ dataVersion = 1
 data ChainDataVersionKey = ChainDataVersionKey
     deriving (Eq, Ord, Show)
 
-instance R.Key ChainDataVersionKey
+instance Key ChainDataVersionKey
 instance KeyValue ChainDataVersionKey Word32
 
 instance Serialize ChainDataVersionKey where
     get = do
-        guard . (== 0x92) =<< S.getWord8
+        guard . (== 0x92) =<< getWord8
         return ChainDataVersionKey
-    put ChainDataVersionKey = S.putWord8 0x92
+    put ChainDataVersionKey = putWord8 0x92
 
 data ChainSync p = ChainSync
     { chainSyncPeer  :: !p
@@ -310,7 +330,7 @@ instance (Monad m, MonadIO m, MonadReader (ChainReader a p) m) =>
          BlockHeaders m where
     addBlockHeader bn = do
         db <- asks myChainDB
-        R.insert db (BlockHeaderKey (headerHash (nodeHeader bn))) bn
+        insert db (BlockHeaderKey (headerHash (nodeHeader bn))) bn
     getBlockHeader bh = do
         db <- asks myChainDB
         retrieve db def (BlockHeaderKey bh)
@@ -321,7 +341,7 @@ instance (Monad m, MonadIO m, MonadReader (ChainReader a p) m) =>
             Just b -> return b
     setBestBlockHeader bn = do
         db <- asks myChainDB
-        R.insert db BestBlockKey bn
+        insert db BestBlockKey bn
     addBlockHeaders bns = do
         db <- asks myChainDB
         writeBatch db (map f bns)
@@ -335,7 +355,7 @@ initChainDB net = do
     db <- asks myChainDB
     ver <- retrieve db def ChainDataVersionKey
     when (ver /= Just dataVersion) $ purgeChainDB >>= writeBatch db
-    R.insert db ChainDataVersionKey dataVersion
+    insert db ChainDataVersionKey dataVersion
     retrieve db def BestBlockKey >>= \b ->
         when (isNothing (b :: Maybe BlockNode)) $ do
             addBlockHeader (genesisNode net)

@@ -9,7 +9,7 @@
 Module      : Network.Haskoin.Node.Peer
 Copyright   : No rights reserved
 License     : UNLICENSE
-Maintainer  : xenog@protonmail.com
+Maintainer  : jprupp@protonmail.ch
 Stability   : experimental
 Portability : POSIX
 
@@ -19,22 +19,31 @@ module Network.Haskoin.Node.Peer
     ( peer
     ) where
 
-import           Conduit
-import           Control.Monad
-import           Control.Monad.Logger
-import           Control.Monad.Reader
+import           Conduit                     (ConduitT, awaitForever, foldC,
+                                              mapM_C, runConduit, takeCE, yield,
+                                              (.|))
+import           Control.Monad               (forever, when)
+import           Control.Monad.Logger        (MonadLoggerIO, logDebugS,
+                                              logErrorS)
+import           Control.Monad.Reader        (runReaderT)
 import           Data.ByteString             (ByteString)
 import qualified Data.ByteString             as B
-import           Data.Conduit.Network
-import           Data.Serialize
-import           Data.String.Conversions
+import           Data.Conduit.Network        (appSink, appSource)
+import           Data.Serialize              (decode, runGet, runPut)
+import           Data.String.Conversions     (cs)
 import           Data.Text                   (Text)
-import           Network.Haskoin.Constants
-import           Network.Haskoin.Network
-import           Network.Haskoin.Node.Common
+import           Network.Haskoin.Constants   (Network)
+import           Network.Haskoin.Network     (Message, MessageHeader (..),
+                                              commandToString, getMessage,
+                                              msgType, putMessage)
+import           Network.Haskoin.Node.Common (PeerConfig (..),
+                                              PeerException (..),
+                                              PeerMessage (..), withConnection)
 import           Network.Socket              (SockAddr)
-import           NQE
-import           UnliftIO
+import           NQE                         (Inbox, PublisherMessage (..),
+                                              receive, send)
+import           UnliftIO                    (MonadUnliftIO, atomically, link,
+                                              throwIO, withAsync)
 
 -- | Run peer process in current thread.
 peer ::

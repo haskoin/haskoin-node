@@ -6,7 +6,7 @@
 Module      : Network.Haskoin.Node.Common
 Copyright   : No rights reserved
 License     : UNLICENSE
-Maintainer  : xenog@protonmail.com
+Maintainer  : jprupp@protonmail.ch
 Stability   : experimental
 Portability : POSIX
 
@@ -14,26 +14,43 @@ Common functions used by Haskoin Node.
 -}
 module Network.Haskoin.Node.Common where
 
-import           Conduit
-import           Control.Monad
-import           Control.Monad.Trans.Maybe
-import           Data.Conduit.Network
-import           Data.Function
-import           Data.List
-import           Data.Maybe
-import           Data.String.Conversions
-import           Data.Time.Clock
-import           Data.Word
+import           Control.Monad               (join)
+import           Control.Monad.Trans.Maybe   (MaybeT (..), runMaybeT)
+import           Data.Conduit.Network        (AppData, clientSettings,
+                                              runGeneralTCPClient)
+import           Data.Function               (on)
+import           Data.List                   (union)
+import           Data.Maybe                  (fromMaybe, isJust)
+import           Data.String.Conversions     (cs)
+import           Data.Time.Clock             (NominalDiffTime, UTCTime)
+import           Data.Word                   (Word32, Word64)
 import           Database.RocksDB            (DB)
-import           Network.Haskoin.Block
-import           Network.Haskoin.Constants
-import           Network.Haskoin.Network
-import           Network.Haskoin.Transaction
-import           Network.Socket              hiding (send)
-import           NQE
-import           System.Random
-import           Text.Read
-import           UnliftIO
+import           Network.Haskoin.Block       (Block (..), BlockHash,
+                                              BlockHeader (..), BlockHeight,
+                                              BlockNode (..), getBlockHash,
+                                              headerHash)
+import           Network.Haskoin.Constants   (Network (..))
+import           Network.Haskoin.Network     (GetData (..), InvType (..),
+                                              InvVector (..), Message (..),
+                                              NetworkAddress (..),
+                                              NotFound (..), Ping (..),
+                                              Pong (..), VarString (..),
+                                              Version (..))
+import           Network.Haskoin.Transaction (Tx, TxHash, getTxHash, txHash)
+import           Network.Socket              (AddrInfo (..), AddrInfoFlag (..),
+                                              Family (..), NameInfoFlag (..),
+                                              SockAddr, SocketType (..),
+                                              defaultHints, getAddrInfo,
+                                              getNameInfo)
+import           NQE                         (Child, Listen, Mailbox, Publisher,
+                                              query, queryS, receive,
+                                              receiveMatchS, send,
+                                              withSubscription)
+import           System.Random               (randomIO)
+import           Text.Read                   (readMaybe)
+import           UnliftIO                    (Async (..), Exception, MonadIO,
+                                              MonadUnliftIO, SomeException,
+                                              catch, liftIO, throwIO, timeout)
 
 -- | Type alias for a combination of hostname and port.
 type HostPort = (Host, Port)
@@ -46,24 +63,26 @@ type Port = Int
 
 -- | Data structure representing an online peer.
 data OnlinePeer = OnlinePeer
-    { onlinePeerAddress   :: !SockAddr
+    { onlinePeerAddress     :: !SockAddr
       -- ^ network address
-    , onlinePeerVerAck    :: !Bool
+    , onlinePeerVerAck      :: !Bool
       -- ^ got version acknowledgement from peer
-    , onlinePeerConnected :: !Bool
+    , onlinePeerConnected   :: !Bool
       -- ^ peer is connected and ready
-    , onlinePeerVersion   :: !(Maybe Version)
+    , onlinePeerVersion     :: !(Maybe Version)
       -- ^ protocol version
-    , onlinePeerAsync     :: !(Async ())
+    , onlinePeerAsync       :: !(Async ())
       -- ^ peer asynchronous process
-    , onlinePeerMailbox   :: !Peer
+    , onlinePeerMailbox     :: !Peer
       -- ^ peer mailbox
-    , onlinePeerNonce     :: !Word64
+    , onlinePeerNonce       :: !Word64
       -- ^ random nonce sent during handshake
-    , onlinePeerPing      :: !(Maybe (UTCTime, Word64))
+    , onlinePeerPing        :: !(Maybe (UTCTime, Word64))
       -- ^ last sent ping time and nonce
-    , onlinePeerPings     :: ![NominalDiffTime]
+    , onlinePeerPings       :: ![NominalDiffTime]
       -- ^ last few ping rountrip duration
+    , onlinePeerConnectTime :: !Word64
+      -- ^ when connection was opened
     }
 
 instance Eq OnlinePeer where
@@ -232,6 +251,8 @@ data PeerException
       -- ^ request to peer timed out
     | UnknownPeer
       -- ^ peer is unknown
+    | PeerTooOld
+      -- ^ peer has been connected too long
     deriving (Eq, Show)
 
 instance Exception PeerException

@@ -7,17 +7,29 @@ module Haskoin.NodeSpec
     ( spec
     ) where
 
-import           Control.Monad
-import           Control.Monad.Logger
-import           Control.Monad.Trans
-import           Data.Maybe
+import           Control.Monad        (forM_, replicateM, replicateM_)
+import           Control.Monad.Logger (runNoLoggingT)
+import           Control.Monad.Trans  (lift)
+import           Data.Maybe           (isJust)
 import qualified Database.RocksDB     as R
-import           Haskoin
-import           Haskoin.Node
+import           Haskoin              (Block (..), BlockHeader (..),
+                                       BlockNode (..), Network,
+                                       NetworkAddress (..), Version (..),
+                                       btcTest, buildMerkleRoot,
+                                       getGenesisHeader, headerHash,
+                                       sockToHostAddress, txHash)
+import           Haskoin.Node         (Chain, ChainEvent (..), Manager,
+                                       NodeConfig (..), NodeEvent (..),
+                                       OnlinePeer (..), Peer, PeerEvent (..),
+                                       chainGetAncestor, chainGetBest,
+                                       chainGetParents, managerGetPeer,
+                                       peerGetBlocks, peerGetTxs, withNode)
 import           Network.Socket       (SockAddr (..))
-import           NQE
-import           Test.Hspec
-import           UnliftIO
+import           NQE                  (Inbox, newInbox, receiveMatch, sendSTM)
+import           Test.Hspec           (Spec, describe, it, shouldBe,
+                                       shouldReturn, shouldSatisfy)
+import           UnliftIO             (MonadIO, MonadUnliftIO, throwString,
+                                       withSystemTempDirectory)
 
 data TestNode = TestNode
     { testMgr    :: Manager

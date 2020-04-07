@@ -5,7 +5,7 @@
 Module      : Haskoin.Node
 Copyright   : No rights reserved
 License     : UNLICENSE
-Maintainer  : xenog@protonmail.com
+Maintainer  : jprupp@protonmail.ch
 Stability   : experimental
 Portability : POSIX
 
@@ -21,8 +21,9 @@ module Haskoin.Node
     , Peer
     , Chain
     , Manager
-    , ChainMessage
-    , ManagerMessage
+    , ChainMessage(..)
+    , ManagerMessage(..)
+    , PeerMessage(..)
     , OnlinePeer(..)
     , NodeConfig(..)
     , NodeEvent(..)
@@ -48,13 +49,34 @@ module Haskoin.Node
     , myVersion
     ) where
 
-import           Control.Monad.Logger
-import           Haskoin
-import           Network.Haskoin.Node.Chain
-import           Network.Haskoin.Node.Common
-import           Network.Haskoin.Node.Manager
-import           NQE
-import           UnliftIO
+import           Control.Monad.Logger         (MonadLoggerIO)
+import           Haskoin                      (BlockNode (..), Headers (..),
+                                               Message (..))
+import           Network.Haskoin.Node.Chain   (chain)
+import           Network.Haskoin.Node.Common  (Chain, ChainConfig (..),
+                                               ChainEvent (..),
+                                               ChainMessage (..), Host,
+                                               HostPort, Manager,
+                                               ManagerConfig (..),
+                                               ManagerMessage (..),
+                                               NodeConfig (..), NodeEvent (..),
+                                               OnlinePeer (..), Peer,
+                                               PeerEvent (..),
+                                               PeerException (..),
+                                               PeerMessage (..), Port,
+                                               chainBlockMain, chainGetAncestor,
+                                               chainGetBest, chainGetBlock,
+                                               chainGetParents,
+                                               chainGetSplitBlock,
+                                               chainIsSynced, killPeer,
+                                               managerGetPeer, managerGetPeers,
+                                               myVersion, peerGetBlocks,
+                                               peerGetPublisher, peerGetTxs,
+                                               sendMessage)
+import           Network.Haskoin.Node.Manager (manager)
+import           NQE                          (Inbox, inboxToMailbox, newInbox,
+                                               sendSTM)
+import           UnliftIO                     (MonadUnliftIO, link, withAsync)
 
 -- | Launch a node in the background. Pass a 'Manager' and 'Chain' to a
 -- function. Node will stop once the function ends.
@@ -118,4 +140,4 @@ node cfg mgr_inbox ch_inbox = do
         nodeConfEvents cfg $ ChainEvent event
         case event of
             ChainBestBlock b -> ManagerBestBlock (nodeHeight b) `sendSTM` mgr
-            _ -> return ()
+            _                -> return ()
