@@ -23,8 +23,7 @@ import           Conduit                     (ConduitT, awaitForever, foldC,
                                               mapM_C, runConduit, takeCE, yield,
                                               (.|))
 import           Control.Monad               (forever, when)
-import           Control.Monad.Logger        (MonadLoggerIO, logDebugS,
-                                              logErrorS)
+import           Control.Monad.Logger        (MonadLoggerIO, logErrorS)
 import           Control.Monad.Reader        (runReaderT)
 import           Data.ByteString             (ByteString)
 import qualified Data.ByteString             as B
@@ -34,8 +33,7 @@ import           Data.String.Conversions     (cs)
 import           Data.Text                   (Text)
 import           Network.Haskoin.Constants   (Network)
 import           Network.Haskoin.Network     (Message, MessageHeader (..),
-                                              commandToString, getMessage,
-                                              msgType, putMessage)
+                                              getMessage, putMessage)
 import           Network.Haskoin.Node.Common (PeerConfig (..),
                                               PeerException (..),
                                               PeerMessage (..), withConnection)
@@ -55,10 +53,8 @@ peer pc inbox = withConnection a $ \ad -> runReaderT (peer_session ad) pc
   where
     a = peerConfAddress pc
     go = forever $ do
-      $(logDebugS) s "Awaiting message"
       receive inbox >>= dispatchMessage pc
     net = peerConfNetwork pc
-    s = peerString (peerConfAddress pc)
     peer_session ad =
         let ins = appSource ad
             ons = appSink ad
@@ -72,20 +68,10 @@ peer pc inbox = withConnection a $ \ad -> runReaderT (peer_session ad) pc
 -- | Internal function to dispatch peer messages.
 dispatchMessage ::
        MonadLoggerIO m => PeerConfig -> PeerMessage -> ConduitT i Message m ()
-dispatchMessage cfg (SendMessage msg) = do
-    $(logDebugS) (peerString (peerConfAddress cfg)) $
-        "Outgoing: " <> cs (commandToString (msgType msg))
-    yield msg
-dispatchMessage cfg (GetPublisher reply) = do
-    $(logDebugS)
-        (peerString (peerConfAddress cfg))
-        "Replying to publisher request"
-    atomically $ reply (peerConfListen cfg)
-dispatchMessage cfg (KillPeer e) = do
-    $(logErrorS) s $ "Killing peer via mailbox request: " <> cs (show e)
-    throwIO e
-  where
-    s = peerString (peerConfAddress cfg)
+dispatchMessage _ (SendMessage msg) = yield msg
+dispatchMessage cfg (GetPublisher reply) =
+    atomically (reply (peerConfListen cfg))
+dispatchMessage _ (KillPeer e) = throwIO e
 
 -- | Internal conduit to parse messages coming from peer.
 inPeerConduit ::
@@ -111,10 +97,7 @@ inPeerConduit net a = forever $ do
                     $(logErrorS) (peerString a) $
                         "Cannot decode payload: " <> cs (show e)
                     throwIO CannotDecodePayload
-                Right msg -> do
-                    $(logDebugS) (peerString a) $
-                        "Incoming: " <> cs (commandToString (msgType msg))
-                    yield msg
+                Right msg -> yield msg
 
 -- | Outgoing peer conduit to serialize and send messages.
 outPeerConduit :: Monad m => Network -> ConduitT Message ByteString m ()
