@@ -5,3 +5,6 @@ nix:
     - secp256k1
     - zlib
     - pkg-config
+extra-deps:
+  - haskoin-core-0.12.0
+  - secp256k1-haskell-0.2.1
