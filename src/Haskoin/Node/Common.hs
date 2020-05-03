@@ -79,6 +79,8 @@ data OnlinePeer = OnlinePeer
       -- ^ random nonce sent during handshake
     , onlinePeerPing        :: !(Maybe (UTCTime, Word64))
       -- ^ last sent ping time and nonce
+    , onlinePeerLastMessage :: !Word64
+      -- ^ last message received by peer
     , onlinePeerPings       :: ![NominalDiffTime]
       -- ^ last few ping rountrip duration
     , onlinePeerConnectTime :: !Word64
@@ -122,25 +124,30 @@ data NodeConfig = NodeConfig
       -- ^ node events are sent to this publisher
     , nodeConfTimeout  :: !Int
       -- ^ timeout in seconds
+    , nodeConfPeerOld  :: !Int
+      -- ^ peer disconnect after seconds
     }
 
 -- | Peer manager configuration.
-data PeerManagerConfig = ManagerConfig
-    { peerManagerMaxPeers :: !Int
+data PeerManagerConfig =
+    PeerManagerConfig
+        { peerManagerMaxPeers :: !Int
       -- ^ maximum number of peers to connect to
-    , peerManagerPeers    :: ![HostPort]
+        , peerManagerPeers    :: ![HostPort]
       -- ^ static list of peers to connect to
-    , peerManagerDiscover :: !Bool
+        , peerManagerDiscover :: !Bool
       -- ^ activate peer discovery
-    , peerManagerNetAddr  :: !NetworkAddress
+        , peerManagerNetAddr  :: !NetworkAddress
       -- ^ network address for the local host
-    , peerManagerNetwork  :: !Network
+        , peerManagerNetwork  :: !Network
       -- ^ network constants
-    , peerManagerEvents   :: !(Listen PeerEvent)
+        , peerManagerEvents   :: !(Listen PeerEvent)
       -- ^ send manager and peer messages to this mailbox
-    , peerManagerTimeout  :: !Int
+        , peerManagerTimeout  :: !Int
       -- ^ timeout in seconds
-    }
+        , peerManagerTooOld   :: !Int
+      -- ^ disconnect peers after connected for so long
+        }
 
 -- | Messages that can be sent to the peer manager.
 data PeerManagerMessage

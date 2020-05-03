@@ -18,9 +18,9 @@ import           Haskoin              (Block (..), BlockHeader (..),
                                        btcTest, buildMerkleRoot,
                                        getGenesisHeader, headerHash,
                                        sockToHostAddress, txHash)
-import           Haskoin.Node         (Chain, ChainEvent (..), PeerManager,
-                                       NodeConfig (..), NodeEvent (..),
-                                       OnlinePeer (..), Peer, PeerEvent (..),
+import           Haskoin.Node         (Chain, ChainEvent (..), NodeConfig (..),
+                                       NodeEvent (..), OnlinePeer (..), Peer,
+                                       PeerEvent (..), PeerManager,
                                        chainGetAncestor, chainGetBest,
                                        chainGetParents, managerGetPeer,
                                        peerGetBlocks, peerGetTxs, withNode)
@@ -149,7 +149,8 @@ withTestNode net str f =
                     , nodeConfNetAddr = NetworkAddress 0 (sockToHostAddress (SockAddrInet 0 0))
                     , nodeConfNet = net
                     , nodeConfEvents = (`sendSTM` node_inbox)
-                    , nodeConfTimeout = 10
+                    , nodeConfTimeout = 120
+                    , nodeConfPeerOld = 48 * 3600
                     }
         withNode cfg $ \(mgr, ch) ->
             lift $

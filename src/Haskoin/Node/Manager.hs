@@ -114,6 +114,12 @@ peerManager cfg inbox =
         withConnectLoop mgr $
             forever $ do
                 m <- receive inbox
+                case m of
+                    PeerManagerPeerMessage p _ -> do
+                        now <- round <$> liftIO getPOSIXTime
+                        o <- asks onlinePeers
+                        atomically $ setLastMessage o now p
+                    _ -> return ()
                 managerMessage m
     f (a, mex) = PeerManagerPeerDied a mex `sendSTM` mgr
 
@@ -235,7 +241,8 @@ managerMessage (PeerManagerCheckPeer p) = checkPeer p
 
 checkPeer :: MonadManager m => Peer -> m ()
 checkPeer p = do
-    ManagerConfig {peerManagerTimeout = to} <- asks myConfig
+    PeerManagerConfig {peerManagerTimeout = to, peerManagerTooOld = old} <-
+        asks myConfig
     b <- asks onlinePeers
     s <- atomically $ peerString b p
     atomically (findPeer b p) >>= \case
@@ -243,13 +250,13 @@ checkPeer p = do
         Just o -> do
             now <- round <$> liftIO getPOSIXTime
             when
-                (onlinePeerConnectTime o < now - 48 * 3600)
+                (onlinePeerConnectTime o < now - fromIntegral old)
                 (killPeer PeerTooOld p)
-    atomically (lastPing b p) >>= \case
+    atomically (lastMessage b p) >>= \case
         Nothing -> pingPeer p
         Just t -> do
-            now <- liftIO getCurrentTime
-            when (diffUTCTime now t > fromIntegral to) $ do
+            now <- round <$> liftIO getPOSIXTime
+            when (now - t > fromIntegral to) $ do
                 $(logErrorS) "Manager" $
                     "Peer " <> s <> " did not respond ping on time"
                 killPeer PeerTimeout p
@@ -337,8 +344,9 @@ connectPeer sa = do
             "Attempted to connect to peer twice: " <> cs (show sa)
         Nothing -> do
             $(logInfoS) "Manager" $ "Connecting to " <> cs (show sa)
-            ManagerConfig {peerManagerNetAddr = ad, peerManagerNetwork = net} <-
-                asks myConfig
+            PeerManagerConfig { peerManagerNetAddr = ad
+                              , peerManagerNetwork = net
+                              } <- asks myConfig
             mgr <- asks myMailbox
             sup <- asks mySupervisor
             nonce <- liftIO randomIO
@@ -430,12 +438,12 @@ gotPong b nonce now p =
                     }
         return diff
 
+setLastMessage :: TVar [OnlinePeer] -> Word64 -> Peer -> STM ()
+setLastMessage b t p = modifyPeer b p $ \o -> o {onlinePeerLastMessage = t}
+
 -- | Return time of last ping sent to peer, if any.
-lastPing :: TVar [OnlinePeer] -> Peer -> STM (Maybe UTCTime)
-lastPing b p =
-    findPeer b p >>= \case
-        Just OnlinePeer {onlinePeerPing = Just (time, _)} -> return (Just time)
-        _ -> return Nothing
+lastMessage :: TVar [OnlinePeer] -> Peer -> STM (Maybe Word64)
+lastMessage b p = fmap onlinePeerLastMessage <$> findPeer b p
 
 -- | Set nonce and time of last ping sent to peer.
 setPeerPing :: TVar [OnlinePeer] -> Word64 -> UTCTime -> Peer -> STM ()
@@ -506,6 +514,7 @@ newOnlinePeer b sa n p a t = do
                 , onlinePeerPings = []
                 , onlinePeerPing = Nothing
                 , onlinePeerConnectTime = t
+                , onlinePeerLastMessage = t
                 }
     insertPeer b op
     return op

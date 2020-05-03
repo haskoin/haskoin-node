@@ -99,7 +99,7 @@ node ::
     -> m ()
 node cfg mgr_inbox ch_inbox = do
     let mgr_config =
-            ManagerConfig
+            PeerManagerConfig
                 { peerManagerMaxPeers = nodeConfMaxPeers cfg
                 , peerManagerPeers = nodeConfPeers cfg
                 , peerManagerDiscover = nodeConfDiscover cfg
@@ -107,6 +107,7 @@ node cfg mgr_inbox ch_inbox = do
                 , peerManagerNetwork = nodeConfNet cfg
                 , peerManagerEvents = mgr_events
                 , peerManagerTimeout = nodeConfTimeout cfg
+                , peerManagerTooOld = nodeConfPeerOld cfg
                 }
     withAsync (peerManager mgr_config mgr_inbox) $ \mgr_async -> do
         link mgr_async
