@@ -242,7 +242,9 @@ checkPeer p = do
         Nothing -> return ()
         Just o -> do
             now <- round <$> liftIO getPOSIXTime
-            when (onlinePeerConnectTime o < now - 1800) (killPeer PeerTooOld p)
+            when
+                (onlinePeerConnectTime o < now - 48 * 3600)
+                (killPeer PeerTooOld p)
     atomically (lastPing b p) >>= \case
         Nothing -> pingPeer p
         Just t -> do
