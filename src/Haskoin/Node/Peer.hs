@@ -76,25 +76,25 @@ inPeerConduit ::
     => Network
     -> SockAddr
     -> ConduitT ByteString Message m ()
-inPeerConduit net a = forever $ do
-    x <- takeCE 24 .| foldC
-    case decode x of
-        Left _ -> do
-            $(logErrorS)
-                (peerString a)
-                "Could not decode incoming message header"
-            throwIO DecodeHeaderError
-        Right (MessageHeader _ _ len _) -> do
-            when (len > 32 * 2 ^ (20 :: Int)) $ do
-                $(logErrorS) (peerString a) "Payload too large"
-                throwIO $ PayloadTooLarge len
-            y <- takeCE (fromIntegral len) .| foldC
-            case runGet (getMessage net) $ x `B.append` y of
-                Left e -> do
-                    $(logErrorS) (peerString a) $
-                        "Cannot decode payload: " <> cs (show e)
-                    throwIO CannotDecodePayload
-                Right msg -> yield msg
+inPeerConduit net a =
+    forever $ do
+        x <- takeCE 24 .| foldC
+        case decode x of
+            Left e -> do
+                $(logErrorS) (peerString a) $
+                    "Could not decode incoming message header: " <> cs e
+                throwIO DecodeHeaderError
+            Right (MessageHeader _ _ len _) -> do
+                when (len > 32 * 2 ^ (20 :: Int)) $ do
+                    $(logErrorS) (peerString a) "Payload too large"
+                    throwIO $ PayloadTooLarge len
+                y <- takeCE (fromIntegral len) .| foldC
+                case runGet (getMessage net) $ x `B.append` y of
+                    Left e -> do
+                        $(logErrorS) (peerString a) $
+                            "Cannot decode payload: " <> cs (show e)
+                        throwIO CannotDecodePayload
+                    Right msg -> yield msg
 
 -- | Outgoing peer conduit to serialize and send messages.
 outPeerConduit :: Monad m => Network -> ConduitT Message ByteString m ()
