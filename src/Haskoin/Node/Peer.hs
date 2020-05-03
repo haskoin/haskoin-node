@@ -80,9 +80,10 @@ inPeerConduit net a =
     forever $ do
         x <- takeCE 24 .| foldC
         case decode x of
-            Left e -> do
-                $(logErrorS) (peerString a) $
-                    "Could not decode incoming message header: " <> cs e
+            Left _ -> do
+                $(logErrorS)
+                    (peerString a)
+                    "Could not decode incoming message header"
                 throwIO DecodeHeaderError
             Right (MessageHeader _ _ len _) -> do
                 when (len > 32 * 2 ^ (20 :: Int)) $ do
