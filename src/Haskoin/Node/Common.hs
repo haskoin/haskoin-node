@@ -1,6 +1,7 @@
 {-# LANGUAGE FlexibleContexts      #-}
 {-# LANGUAGE LambdaCase            #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE OverloadedStrings     #-}
 {-# LANGUAGE RankNTypes            #-}
 {-|
 Module      : Network.Haskoin.Node.Common
@@ -12,45 +13,44 @@ Portability : POSIX
 
 Common functions used by Haskoin Node.
 -}
-module Network.Haskoin.Node.Common where
+module Haskoin.Node.Common where
 
-import           Control.Monad               (join)
-import           Control.Monad.Trans.Maybe   (MaybeT (..), runMaybeT)
-import           Data.Conduit.Network        (AppData, clientSettings,
-                                              runGeneralTCPClient)
-import           Data.Function               (on)
-import           Data.List                   (union)
-import           Data.Maybe                  (fromMaybe, isJust)
-import           Data.String.Conversions     (cs)
-import           Data.Time.Clock             (NominalDiffTime, UTCTime)
-import           Data.Word                   (Word32, Word64)
-import           Database.RocksDB            (DB)
-import           Network.Haskoin.Block       (Block (..), BlockHash,
-                                              BlockHeader (..), BlockHeight,
-                                              BlockNode (..), getBlockHash,
-                                              headerHash)
-import           Network.Haskoin.Constants   (Network (..))
-import           Network.Haskoin.Network     (GetData (..), InvType (..),
-                                              InvVector (..), Message (..),
-                                              NetworkAddress (..),
-                                              NotFound (..), Ping (..),
-                                              Pong (..), VarString (..),
-                                              Version (..))
-import           Network.Haskoin.Transaction (Tx, TxHash, getTxHash, txHash)
-import           Network.Socket              (AddrInfo (..), AddrInfoFlag (..),
-                                              Family (..), NameInfoFlag (..),
-                                              SockAddr, SocketType (..),
-                                              defaultHints, getAddrInfo,
-                                              getNameInfo)
-import           NQE                         (Child, Listen, Mailbox, Publisher,
-                                              query, queryS, receive,
-                                              receiveMatchS, send,
-                                              withSubscription)
-import           System.Random               (randomIO)
-import           Text.Read                   (readMaybe)
-import           UnliftIO                    (Async (..), Exception, MonadIO,
-                                              MonadUnliftIO, SomeException,
-                                              catch, liftIO, throwIO, timeout)
+import           Control.Monad             (join)
+import           Control.Monad.Trans.Maybe (MaybeT (..), runMaybeT)
+import           Data.Conduit.Network      (AppData, clientSettings,
+                                            runGeneralTCPClient)
+import           Data.Function             (on)
+import           Data.List                 (union)
+import           Data.Maybe                (fromMaybe, isJust)
+import           Data.String.Conversions   (cs)
+import           Data.Text                 (Text)
+import           Data.Time.Clock           (NominalDiffTime, UTCTime)
+import           Data.Word                 (Word32, Word64)
+import           Database.RocksDB          (DB)
+import           Haskoin                   (Block (..), BlockHash,
+                                            BlockHeader (..), BlockHeight,
+                                            BlockNode (..), GetData (..),
+                                            InvType (..), InvVector (..),
+                                            Message (..), Network (..),
+                                            NetworkAddress (..), NotFound (..),
+                                            Ping (..), Pong (..), Tx, TxHash,
+                                            VarString (..), Version (..),
+                                            getBlockHash, getTxHash, headerHash,
+                                            txHash)
+import           Network.Socket            (AddrInfo (..), AddrInfoFlag (..),
+                                            Family (..), NameInfoFlag (..),
+                                            SockAddr, SocketType (..),
+                                            defaultHints, getAddrInfo,
+                                            getNameInfo)
+import           NQE                       (Child, Listen, Mailbox, Publisher,
+                                            query, queryS, receive,
+                                            receiveMatchS, send,
+                                            withSubscription)
+import           System.Random             (randomIO)
+import           Text.Read                 (readMaybe)
+import           UnliftIO                  (Async (..), Exception, MonadIO,
+                                            MonadUnliftIO, SomeException, catch,
+                                            liftIO, throwIO, timeout)
 
 -- | Type alias for a combination of hostname and port.
 type HostPort = (Host, Port)
@@ -102,7 +102,7 @@ type Peer = Mailbox PeerMessage
 type Chain = Mailbox ChainMessage
 
 -- | Mailbox for peer manager process.
-type Manager = Mailbox ManagerMessage
+type PeerManager = Mailbox PeerManagerMessage
 
 -- | General node configuration.
 data NodeConfig = NodeConfig
@@ -125,44 +125,46 @@ data NodeConfig = NodeConfig
     }
 
 -- | Peer manager configuration.
-data ManagerConfig = ManagerConfig
-    { mgrConfMaxPeers :: !Int
+data PeerManagerConfig = ManagerConfig
+    { peerManagerMaxPeers :: !Int
       -- ^ maximum number of peers to connect to
-    , mgrConfPeers    :: ![HostPort]
+    , peerManagerPeers    :: ![HostPort]
       -- ^ static list of peers to connect to
-    , mgrConfDiscover :: !Bool
+    , peerManagerDiscover :: !Bool
       -- ^ activate peer discovery
-    , mgrConfNetAddr  :: !NetworkAddress
+    , peerManagerNetAddr  :: !NetworkAddress
       -- ^ network address for the local host
-    , mgrConfNetwork  :: !Network
+    , peerManagerNetwork  :: !Network
       -- ^ network constants
-    , mgrConfEvents   :: !(Listen PeerEvent)
+    , peerManagerEvents   :: !(Listen PeerEvent)
       -- ^ send manager and peer messages to this mailbox
-    , mgrConfTimeout  :: !Int
+    , peerManagerTimeout  :: !Int
       -- ^ timeout in seconds
     }
 
 -- | Messages that can be sent to the peer manager.
-data ManagerMessage
-    = ManagerConnect
+data PeerManagerMessage
+    = PeerManagerConnect
       -- ^ try to connect to peers
-    | ManagerGetPeers !(Listen [OnlinePeer])
+    | PeerManagerGetPeers !(Listen [OnlinePeer])
       -- ^ get all connected peers
-    | ManagerGetOnlinePeer !Peer !(Listen (Maybe OnlinePeer))
+    | PeerManagerGetOnlinePeer !Peer !(Listen (Maybe OnlinePeer))
       -- ^ get a peer information
-    | ManagerCheckPeer !Peer
+    | PeerManagerCheckPeer !Peer
       -- ^ check this peer
-    | ManagerPeerMessage !Peer !Message
+    | PeerManagerPeerMessage !Peer !Message
       -- ^ peer got a message that is forwarded to manager
-    | ManagerPeerDied !Child !(Maybe SomeException)
+    | PeerManagerPeerDied !Child !(Maybe SomeException)
       -- ^ child died
-    | ManagerBestBlock !BlockHeight
+    | PeerManagerBestBlock !BlockHeight
       -- ^ set this as our best block
 
 -- | Configuration for chain syncing process.
 data ChainConfig = ChainConfig
     { chainConfDB      :: !DB
       -- ^ database handle
+    , chainConfManager :: !PeerManager
+      -- ^ peer manager
     , chainConfNetwork :: !Network
       -- ^ network constants
     , chainConfEvents  :: !(Listen ChainEvent)
@@ -311,33 +313,33 @@ myVersion :: Word32
 myVersion = 70012
 
 -- | Internal function used by peer to send a message to the peer manager.
-managerPeerMessage :: MonadIO m => Peer -> Message -> Manager -> m ()
-managerPeerMessage p msg mgr = ManagerPeerMessage p msg `send` mgr
+managerPeerMessage :: MonadIO m => Peer -> Message -> PeerManager -> m ()
+managerPeerMessage p msg mgr = PeerManagerPeerMessage p msg `send` mgr
 
 -- | Get list of connected peers from manager.
 managerGetPeers ::
-       MonadIO m => Manager -> m [OnlinePeer]
-managerGetPeers mgr = ManagerGetPeers `query` mgr
+       MonadIO m => PeerManager -> m [OnlinePeer]
+managerGetPeers mgr = PeerManagerGetPeers `query` mgr
 
 -- | Get information for an online peer from manager.
-managerGetPeer :: MonadIO m => Peer -> Manager -> m (Maybe OnlinePeer)
-managerGetPeer p mgr = ManagerGetOnlinePeer p `query` mgr
+managerGetPeer :: MonadIO m => Peer -> PeerManager -> m (Maybe OnlinePeer)
+managerGetPeer p mgr = PeerManagerGetOnlinePeer p `query` mgr
 
 -- | Kill a peer with the provided exception.
 killPeer :: MonadIO m => PeerException -> Peer -> m ()
 killPeer e p = KillPeer e `send` p
 
 -- | Internal function used by manager to check peers periodically.
-managerCheck :: MonadIO m => Peer -> Manager -> m ()
-managerCheck p mgr = ManagerCheckPeer p `send` mgr
+managerCheck :: MonadIO m => Peer -> PeerManager -> m ()
+managerCheck p mgr = PeerManagerCheckPeer p `send` mgr
 
 -- | Internal function used to ask manager to connect to a new peer.
-managerConnect :: MonadIO m => Manager ->  m ()
-managerConnect mgr = ManagerConnect `send` mgr
+managerConnect :: MonadIO m => PeerManager ->  m ()
+managerConnect mgr = PeerManagerConnect `send` mgr
 
 -- | Set the best block that the manager knows about.
-managerSetBest :: MonadIO m => BlockHeight -> Manager -> m ()
-managerSetBest bh mgr = ManagerBestBlock bh `send` mgr
+managerSetBest :: MonadIO m => BlockHeight -> PeerManager -> m ()
+managerSetBest bh mgr = PeerManagerBestBlock bh `send` mgr
 
 -- | Send a network message to peer.
 sendMessage :: MonadIO m => Message -> Peer -> m ()
@@ -539,3 +541,13 @@ median ls
     | length ls `mod` 2 == 0 =
         Just . (/ 2) . sum . take 2 $ drop (length ls `div` 2 - 1) ls
     | otherwise = Just . head $ drop (length ls `div` 2) ls
+
+-- | Peer string for logging
+peerString :: SockAddr -> Text
+peerString a = "Peer<" <> cs (show a) <> ">"
+
+managerPeerText :: MonadIO m => Peer -> PeerManager -> m Text
+managerPeerText p mgr =
+    managerGetPeer p mgr >>= \case
+        Nothing -> return "???"
+        Just op -> return $ cs (show (onlinePeerAddress op))

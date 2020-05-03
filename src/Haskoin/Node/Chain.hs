@@ -18,52 +18,52 @@ Portability : POSIX
 
 Block chain headers synchronizing process.
 -}
-module Network.Haskoin.Node.Chain
+module Haskoin.Node.Chain
     ( chain
     ) where
 
-import           Control.Monad               (forever, guard, unless, void,
-                                              when)
-import           Control.Monad.Except        (runExceptT, throwError)
-import           Control.Monad.Logger        (MonadLoggerIO, logErrorS,
-                                              logInfoS)
-import           Control.Monad.Reader        (MonadReader, asks, runReaderT)
-import           Control.Monad.Trans         (lift)
-import           Control.Monad.Trans.Maybe   (MaybeT (..), runMaybeT)
-import qualified Data.ByteString             as B
-import           Data.Default                (def)
-import           Data.List                   (delete, nub)
-import           Data.Maybe                  (isJust, isNothing, listToMaybe)
-import           Data.Serialize              (Serialize, get, getWord8, put,
-                                              putWord8)
-import           Data.String.Conversions     (cs)
-import           Data.Time.Clock.POSIX       (getPOSIXTime)
-import           Data.Word                   (Word32)
-import           Database.RocksDB            (DB)
-import qualified Database.RocksDB            as R
-import           Database.RocksDB.Query      (Key, KeyValue, insert, insertOp,
-                                              retrieve, writeBatch)
-import           Haskoin                     (BlockHash, BlockHeader (..),
-                                              BlockHeaders (..), BlockNode (..),
-                                              GetHeaders (..), Message (..),
-                                              Network, Timestamp, blockLocator,
-                                              connectBlocks, genesisNode,
-                                              getAncestor, headerHash,
-                                              splitPoint)
-import           Network.Haskoin.Node.Common (Chain, ChainConfig (..),
-                                              ChainEvent (..),
-                                              ChainMessage (..), Peer,
-                                              PeerException (..), killPeer,
-                                              myVersion, sendMessage)
-import           NQE                         (Inbox, inboxToMailbox, receive,
-                                              send)
-import           System.Random               (randomRIO)
-import           UnliftIO                    (MonadIO, MonadUnliftIO, TVar,
-                                              atomically, liftIO, link,
-                                              modifyTVar, newTVarIO, readTVar,
-                                              readTVarIO, withAsync, writeTVar)
-import           UnliftIO.Concurrent         (threadDelay)
-import           UnliftIO.Resource           (runResourceT)
+import           Control.Monad             (forM_, forever, guard, unless, void,
+                                            when)
+import           Control.Monad.Except      (runExceptT, throwError)
+import           Control.Monad.Logger      (MonadLoggerIO, logDebugS, logErrorS,
+                                            logInfoS)
+import           Control.Monad.Reader      (MonadReader, asks, runReaderT)
+import           Control.Monad.Trans       (lift)
+import           Control.Monad.Trans.Maybe (MaybeT (..), runMaybeT)
+import qualified Data.ByteString           as B
+import           Data.Default              (def)
+import           Data.List                 (delete, nub)
+import           Data.Maybe                (isJust, isNothing, listToMaybe)
+import           Data.Serialize            (Serialize, get, getWord8, put,
+                                            putWord8)
+import           Data.String.Conversions   (cs)
+import           Data.Time.Clock.POSIX     (getPOSIXTime)
+import           Data.Word                 (Word32)
+import           Database.RocksDB          (DB)
+import qualified Database.RocksDB          as R
+import           Database.RocksDB.Query    (Key, KeyValue, insert, insertOp,
+                                            retrieve, writeBatch)
+import           Haskoin                   (BlockHash, BlockHeader (..),
+                                            BlockHeaders (..), BlockNode (..),
+                                            GetHeaders (..), Message (..),
+                                            Network, Timestamp, blockHashToHex,
+                                            blockLocator, connectBlocks,
+                                            genesisNode, getAncestor,
+                                            headerHash, splitPoint)
+import           Haskoin.Node.Common       (Chain, ChainConfig (..),
+                                            ChainEvent (..), ChainMessage (..),
+                                            Peer, PeerException (..), killPeer,
+                                            managerPeerText, myVersion,
+                                            sendMessage)
+import           NQE                       (Inbox, inboxToMailbox, receive,
+                                            send)
+import           System.Random             (randomRIO)
+import           UnliftIO                  (MonadIO, MonadUnliftIO, TVar,
+                                            atomically, liftIO, link,
+                                            modifyTVar, newTVarIO, readTVar,
+                                            readTVarIO, withAsync, writeTVar)
+import           UnliftIO.Concurrent       (threadDelay)
+import           UnliftIO.Resource         (runResourceT)
 
 type MonadChain m
      = (MonadLoggerIO m, MonadChainLogic ChainConfig Peer m)
@@ -91,28 +91,37 @@ chain cfg inbox = do
 
 chainEvent :: MonadChain m => ChainEvent -> m ()
 chainEvent e = do
-    l <- chainConfEvents <$> asks myReader
+    l <- asks (chainConfEvents . myReader)
     case e of
         ChainBestBlock b ->
             $(logInfoS) "Chain" $
             "Best block header at height: " <> cs (show (nodeHeight b))
         ChainSynced b ->
             $(logInfoS) "Chain" $
-            "Headers now in sync at height: " <> cs (show (nodeHeight b))
+            "Headers in sync at height: " <> cs (show (nodeHeight b))
     atomically $ l e
 
 processHeaders ::
        MonadChain m => Peer -> [BlockHeader] -> m ()
 processHeaders p hs =
     void . runMaybeT $ do
-        net <- chainConfNetwork <$> asks myReader
-        unless (null hs) . $(logInfoS) "Chain" $
-            "Importing " <> cs (show (length hs)) <> " headers"
+        net <- asks (chainConfNetwork . myReader)
+        mgr <- asks (chainConfManager . myReader)
+        p' <- managerPeerText p mgr
+        unless (null hs) $
+            forM_ (zip [(1 :: Int) ..] hs) $ \(i, h) ->
+                $(logDebugS) "Chain" $
+                "Importing " <> cs (show i) <> "/" <> cs (show (length hs)) <>
+                " header " <>
+                blockHashToHex (headerHash h) <>
+                " from peer " <>
+                p'
         now <- round <$> liftIO getPOSIXTime
         pbest <- getBestBlockHeader
         importHeaders net now hs >>= \case
             Left e -> do
-                $(logErrorS) "Chain" "Could not connect received headers"
+                $(logErrorS) "Chain" $
+                    "Could not connect received headers from peer " <> p'
                 e `killPeer` p
             Right done -> do
                 setLastReceived now
@@ -181,7 +190,9 @@ chainMessage ChainPing = do
         Nothing -> return ()
         Just ChainSync {chainSyncPeer = p, chainTimestamp = t}
             | now - t > fromIntegral to -> do
-                $(logErrorS) "Chain" "Syncing peer timed out"
+                mgr <- asks (chainConfManager . myReader)
+                p' <- managerPeerText p mgr
+                $(logErrorS) "Chain" $ "Syncing peer timed out: " <> p'
                 PeerTimeout `killPeer` p
             | otherwise -> return ()
 

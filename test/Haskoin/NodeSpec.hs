@@ -18,7 +18,7 @@ import           Haskoin              (Block (..), BlockHeader (..),
                                        btcTest, buildMerkleRoot,
                                        getGenesisHeader, headerHash,
                                        sockToHostAddress, txHash)
-import           Haskoin.Node         (Chain, ChainEvent (..), Manager,
+import           Haskoin.Node         (Chain, ChainEvent (..), PeerManager,
                                        NodeConfig (..), NodeEvent (..),
                                        OnlinePeer (..), Peer, PeerEvent (..),
                                        chainGetAncestor, chainGetBest,
@@ -32,7 +32,7 @@ import           UnliftIO             (MonadIO, MonadUnliftIO, throwString,
                                        withSystemTempDirectory)
 
 data TestNode = TestNode
-    { testMgr    :: Manager
+    { testMgr    :: PeerManager
     , testChain  :: Chain
     , nodeEvents :: Inbox NodeEvent
     }

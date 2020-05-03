@@ -20,9 +20,9 @@ module Haskoin.Node
     , HostPort
     , Peer
     , Chain
-    , Manager
+    , PeerManager
     , ChainMessage(..)
-    , ManagerMessage(..)
+    , PeerManagerMessage(..)
     , PeerMessage(..)
     , OnlinePeer(..)
     , NodeConfig(..)
@@ -34,6 +34,7 @@ module Haskoin.Node
     , node
     , managerGetPeers
     , managerGetPeer
+    , managerPeerText
     , killPeer
     , sendMessage
     , peerGetPublisher
@@ -49,41 +50,36 @@ module Haskoin.Node
     , myVersion
     ) where
 
-import           Control.Monad.Logger         (MonadLoggerIO)
-import           Haskoin                      (BlockNode (..), Headers (..),
-                                               Message (..))
-import           Network.Haskoin.Node.Chain   (chain)
-import           Network.Haskoin.Node.Common  (Chain, ChainConfig (..),
-                                               ChainEvent (..),
-                                               ChainMessage (..), Host,
-                                               HostPort, Manager,
-                                               ManagerConfig (..),
-                                               ManagerMessage (..),
-                                               NodeConfig (..), NodeEvent (..),
-                                               OnlinePeer (..), Peer,
-                                               PeerEvent (..),
-                                               PeerException (..),
-                                               PeerMessage (..), Port,
-                                               chainBlockMain, chainGetAncestor,
-                                               chainGetBest, chainGetBlock,
-                                               chainGetParents,
-                                               chainGetSplitBlock,
-                                               chainIsSynced, killPeer,
-                                               managerGetPeer, managerGetPeers,
-                                               myVersion, peerGetBlocks,
-                                               peerGetPublisher, peerGetTxs,
-                                               sendMessage)
-import           Network.Haskoin.Node.Manager (manager)
-import           NQE                          (Inbox, inboxToMailbox, newInbox,
-                                               sendSTM)
-import           UnliftIO                     (MonadUnliftIO, link, withAsync)
+import           Control.Monad.Logger (MonadLoggerIO)
+import           Haskoin              (BlockNode (..), Headers (..),
+                                       Message (..))
+import           Haskoin.Node.Chain   (chain)
+import           Haskoin.Node.Common  (Chain, ChainConfig (..), ChainEvent (..),
+                                       ChainMessage (..), Host, HostPort,
+                                       NodeConfig (..), NodeEvent (..),
+                                       OnlinePeer (..), Peer, PeerEvent (..),
+                                       PeerException (..), PeerManager,
+                                       PeerManagerConfig (..),
+                                       PeerManagerMessage (..),
+                                       PeerMessage (..), Port, chainBlockMain,
+                                       chainGetAncestor, chainGetBest,
+                                       chainGetBlock, chainGetParents,
+                                       chainGetSplitBlock, chainIsSynced,
+                                       killPeer, managerGetPeer,
+                                       managerGetPeers, managerPeerText,
+                                       myVersion, peerGetBlocks,
+                                       peerGetPublisher, peerGetTxs,
+                                       sendMessage)
+import           Haskoin.Node.Manager (peerManager)
+import           NQE                  (Inbox, inboxToMailbox, newInbox, sendSTM)
+import           UnliftIO             (MonadUnliftIO, link, withAsync)
 
 -- | Launch a node in the background. Pass a 'Manager' and 'Chain' to a
 -- function. Node will stop once the function ends.
 withNode ::
        (MonadLoggerIO m, MonadUnliftIO m)
     => NodeConfig
-    -> ((Manager, Chain) -> m a)
+    -> ((PeerManager, Chain) -> m a)
     -> m a
 withNode cfg f = do
     mgr_inbox <- newInbox
@@ -98,21 +94,21 @@ node ::
        , MonadUnliftIO m
        )
     => NodeConfig
-    -> Inbox ManagerMessage
+    -> Inbox PeerManagerMessage
     -> Inbox ChainMessage
     -> m ()
 node cfg mgr_inbox ch_inbox = do
     let mgr_config =
             ManagerConfig
-                { mgrConfMaxPeers = nodeConfMaxPeers cfg
-                , mgrConfPeers = nodeConfPeers cfg
-                , mgrConfDiscover = nodeConfDiscover cfg
-                , mgrConfNetAddr = nodeConfNetAddr cfg
-                , mgrConfNetwork = nodeConfNet cfg
-                , mgrConfEvents = mgr_events
-                , mgrConfTimeout = nodeConfTimeout cfg
+                { peerManagerMaxPeers = nodeConfMaxPeers cfg
+                , peerManagerPeers = nodeConfPeers cfg
+                , peerManagerDiscover = nodeConfDiscover cfg
+                , peerManagerNetAddr = nodeConfNetAddr cfg
+                , peerManagerNetwork = nodeConfNet cfg
+                , peerManagerEvents = mgr_events
+                , peerManagerTimeout = nodeConfTimeout cfg
                 }
-    withAsync (manager mgr_config mgr_inbox) $ \mgr_async -> do
+    withAsync (peerManager mgr_config mgr_inbox) $ \mgr_async -> do
         link mgr_async
         let chain_config =
                 ChainConfig
@@ -120,6 +116,7 @@ node cfg mgr_inbox ch_inbox = do
                     , chainConfNetwork = nodeConfNet cfg
                     , chainConfEvents = chain_events
                     , chainConfTimeout = nodeConfTimeout cfg
+                    , chainConfManager = mgr
                     }
         chain chain_config ch_inbox
   where
@@ -139,5 +136,6 @@ node cfg mgr_inbox ch_inbox = do
     chain_events event = do
         nodeConfEvents cfg $ ChainEvent event
         case event of
-            ChainBestBlock b -> ManagerBestBlock (nodeHeight b) `sendSTM` mgr
-            _                -> return ()
+            ChainBestBlock b ->
+                PeerManagerBestBlock (nodeHeight b) `sendSTM` mgr
+            _ -> return ()

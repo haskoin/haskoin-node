@@ -15,33 +15,30 @@ Portability : POSIX
 
 Network peer process. Represents a network peer connection locally.
 -}
-module Network.Haskoin.Node.Peer
+module Haskoin.Node.Peer
     ( peer
     ) where
 
-import           Conduit                     (ConduitT, awaitForever, foldC,
-                                              mapM_C, runConduit, takeCE, yield,
-                                              (.|))
-import           Control.Monad               (forever, when)
-import           Control.Monad.Logger        (MonadLoggerIO, logErrorS)
-import           Control.Monad.Reader        (runReaderT)
-import           Data.ByteString             (ByteString)
-import qualified Data.ByteString             as B
-import           Data.Conduit.Network        (appSink, appSource)
-import           Data.Serialize              (decode, runGet, runPut)
-import           Data.String.Conversions     (cs)
-import           Data.Text                   (Text)
-import           Network.Haskoin.Constants   (Network)
-import           Network.Haskoin.Network     (Message, MessageHeader (..),
-                                              getMessage, putMessage)
-import           Network.Haskoin.Node.Common (PeerConfig (..),
-                                              PeerException (..),
-                                              PeerMessage (..), withConnection)
-import           Network.Socket              (SockAddr)
-import           NQE                         (Inbox, PublisherMessage (..),
-                                              receive, send)
-import           UnliftIO                    (MonadUnliftIO, atomically, link,
-                                              throwIO, withAsync)
+import           Conduit                 (ConduitT, awaitForever, foldC, mapM_C,
+                                          runConduit, takeCE, yield, (.|))
+import           Control.Monad           (forever, when)
+import           Control.Monad.Logger    (MonadLoggerIO, logErrorS)
+import           Control.Monad.Reader    (runReaderT)
+import           Data.ByteString         (ByteString)
+import qualified Data.ByteString         as B
+import           Data.Conduit.Network    (appSink, appSource)
+import           Data.Serialize          (decode, runGet, runPut)
+import           Data.String.Conversions (cs)
+import           Haskoin                 (Message, MessageHeader (..), Network,
+                                          getMessage, putMessage)
+import           Haskoin.Node.Common     (PeerConfig (..), PeerException (..),
+                                          PeerMessage (..), peerString,
+                                          withConnection)
+import           Network.Socket          (SockAddr)
+import           NQE                     (Inbox, PublisherMessage (..), receive,
+                                          send)
+import           UnliftIO                (MonadUnliftIO, atomically, link,
+                                          throwIO, withAsync)
 
 -- | Run peer process in current thread.
 peer ::
@@ -102,7 +99,3 @@ inPeerConduit net a = forever $ do
 -- | Outgoing peer conduit to serialize and send messages.
 outPeerConduit :: Monad m => Network -> ConduitT Message ByteString m ()
 outPeerConduit net = awaitForever $ yield . runPut . putMessage net
-
--- | Peer string for logging
-peerString :: SockAddr -> Text
-peerString a = "Peer<" <> cs (show a) <> ">"
