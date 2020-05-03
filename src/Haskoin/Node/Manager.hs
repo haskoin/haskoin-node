@@ -154,7 +154,7 @@ logConnectedPeers :: MonadManager m => m ()
 logConnectedPeers = do
     m <- asks (peerManagerMaxPeers . myConfig)
     l <- length <$> getConnectedPeers
-    $(logInfoS) "Manager" $
+    $(logInfoS) "PeerManager" $
         "Peers connected: " <> cs (show l) <> "/" <> cs (show m)
 
 getOnlinePeers :: MonadManager m => m [OnlinePeer]
@@ -181,7 +181,7 @@ managerMessage (PeerManagerPeerMessage p (MVersion v)) = do
         Right () -> do
             MVerAck `sendMessage` p
         Left x -> do
-            $(logErrorS) "Manager" $
+            $(logErrorS) "PeerManager" $
                 "Version rejected for peer " <> s <> ": " <> cs (show x)
             killPeer x p
 
@@ -191,7 +191,7 @@ managerMessage (PeerManagerPeerMessage p MVerAck) = do
     atomically (setPeerVerAck b p) >>= \case
         Just o -> when (onlinePeerConnected o) $ announcePeer p
         Nothing -> do
-            $(logErrorS) "Manager" $ "Received verack from unknown peer: " <> s
+            $(logErrorS) "PeerManager" $ "Received verack from unknown peer: " <> s
             killPeer UnknownPeer p
 
 managerMessage (PeerManagerPeerMessage p (MAddr (Addr nas))) =
@@ -200,10 +200,15 @@ managerMessage (PeerManagerPeerMessage p (MAddr (Addr nas))) =
             let sas = map (hostToSockAddr . naAddress . snd) nas
             b <- asks onlinePeers
             s <- atomically $ peerString b p
-            $(logInfoS) "Manager" $
-                "Received " <> cs (show (length sas)) <> " new peers from peer " <>
-                s
-            forM_ sas newPeer
+            forM_ (zip [(1 :: Int) ..] sas) $ \(i, a) -> do
+                $(logDebugS) "PeerManager" $
+                    "Received peer address " <> cs (show i) <> "/" <>
+                    cs (show (length sas)) <>
+                    ": " <>
+                    cs (show a) <>
+                    " from peer " <>
+                    s
+                newPeer a
 
 managerMessage (PeerManagerPeerMessage p m@(MPong (Pong n))) = do
     now <- liftIO getCurrentTime
@@ -257,7 +262,7 @@ checkPeer p = do
         Just t -> do
             now <- round <$> liftIO getPOSIXTime
             when (now - t > fromIntegral to) $ do
-                $(logErrorS) "Manager" $
+                $(logErrorS) "PeerManager" $
                     "Peer " <> s <> " did not respond ping on time"
                 killPeer PeerTimeout p
 
@@ -265,7 +270,7 @@ pingPeer :: MonadManager m => Peer -> m ()
 pingPeer p = do
     b <- asks onlinePeers
     atomically (findPeer b p) >>= \case
-        Nothing -> $(logDebugS) "Manager" $ "Will not ping unknown peer"
+        Nothing -> $(logDebugS) "PeerManager" $ "Will not ping unknown peer"
         Just o
             | onlinePeerConnected o -> do
                 n <- liftIO randomIO
@@ -291,17 +296,17 @@ processPeerOffline a e = do
             atomically $ removePeer b p
             logConnectedPeers
   where
-    log_unknown Nothing = $(logErrorS) "Manager" "Disconnected unknown peer"
+    log_unknown Nothing = $(logErrorS) "PeerManager" "Disconnected unknown peer"
     log_unknown (Just x) =
-        $(logErrorS) "Manager" $ "Unknown peer died: " <> cs (show x)
+        $(logErrorS) "PeerManager" $ "Unknown peer died: " <> cs (show x)
     log_disconnected s Nothing =
-        $(logWarnS) "Manager" $ "Disconnected peer: " <> s
+        $(logWarnS) "PeerManager" $ "Disconnected peer: " <> s
     log_disconnected s (Just x) =
-        $(logErrorS) "Manager" $ "Peer " <> s <> " died: " <> cs (show x)
+        $(logErrorS) "PeerManager" $ "Peer " <> s <> " died: " <> cs (show x)
     log_not_connect s Nothing =
-        $(logWarnS) "Manager" $ "Could not connect to peer " <> s
+        $(logWarnS) "PeerManager" $ "Could not connect to peer " <> s
     log_not_connect s (Just x) =
-        $(logErrorS) "Manager" $
+        $(logErrorS) "PeerManager" $
         "Could not connect to peer " <> s <> ": " <> cs (show x)
 
 announcePeer :: MonadManager m => Peer -> m ()
@@ -311,12 +316,12 @@ announcePeer p = do
     mgr <- asks myMailbox
     atomically (findPeer b p) >>= \case
         Just OnlinePeer {onlinePeerAddress = a, onlinePeerConnected = True} -> do
-            $(logInfoS) "Manager" $ "Handshake completed for peer " <> s
+            $(logInfoS) "PeerManager" $ "Connected to peer " <> s
             managerEvent $ PeerConnected p a
             logConnectedPeers
             managerCheck p mgr
         Just OnlinePeer {onlinePeerConnected = False} -> return ()
-        Nothing -> $(logErrorS) "Manager" "Will not announce unknown peer"
+        Nothing -> $(logErrorS) "PeerManager" "Not announcing disconnected peer"
 
 getNewPeer :: (MonadUnliftIO m, MonadManager m) => m (Maybe SockAddr)
 getNewPeer = runMaybeT $ lift loadPeers >> go
@@ -340,10 +345,10 @@ connectPeer sa = do
     os <- asks onlinePeers
     atomically (findPeerAddress os sa) >>= \case
         Just _ ->
-            $(logErrorS) "Manager" $
+            $(logErrorS) "PeerManager" $
             "Attempted to connect to peer twice: " <> cs (show sa)
         Nothing -> do
-            $(logInfoS) "Manager" $ "Connecting to " <> cs (show sa)
+            $(logInfoS) "PeerManager" $ "Connecting to " <> cs (show sa)
             PeerManagerConfig { peerManagerNetAddr = ad
                               , peerManagerNetwork = net
                               } <- asks myConfig

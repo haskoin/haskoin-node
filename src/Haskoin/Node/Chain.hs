@@ -192,7 +192,10 @@ chainMessage ChainPing = do
             | now - t > fromIntegral to -> do
                 mgr <- asks (chainConfManager . myReader)
                 p' <- managerPeerText p mgr
-                $(logErrorS) "Chain" $ "Syncing peer timed out: " <> p'
+                $(logErrorS) "Chain" $
+                    "Syncing peer timed out after " <> cs (show (now - t)) <>
+                    " seconds: " <>
+                    p'
                 PeerTimeout `killPeer` p
             | otherwise -> return ()
 
