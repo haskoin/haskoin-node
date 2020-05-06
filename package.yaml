@@ -15,7 +15,6 @@ extra-source-files:
   - CHANGELOG.md
 dependencies:
   - base >=4.9 && <5
-  - base64
   - bytestring
   - cereal
   - conduit
@@ -50,6 +49,7 @@ tests:
       build-tool-depends:
           hspec-discover:hspec-discover
     dependencies:
+      - base64
       - hspec
       - haskoin-node
       - HUnit
