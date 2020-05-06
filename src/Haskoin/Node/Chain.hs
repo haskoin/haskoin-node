@@ -142,7 +142,8 @@ syncNewPeer =
     getSyncingPeer >>= \case
         Nothing -> do
             nextPeer >>= \case
-                Nothing -> return ()
+                Nothing ->
+                    $(logDebugS) "Chain" "No more peers to sync headers against"
                 Just p -> syncPeer p
         Just _ -> return ()
 
@@ -153,19 +154,25 @@ syncNotif =
 
 syncPeer :: MonadChain m => Peer -> m ()
 syncPeer p = do
+    mgr <- asks (chainConfManager . myReader)
     bb <-
         chainSyncingPeer >>= \case
-            Just ChainSync {chainSyncPeer = p', chainHighest = Just g}
-                | p == p' -> return g
+            Just ChainSync {chainSyncPeer = p2, chainHighest = Just g}
+                | p == p2 -> return g
             _ -> getBestBlockHeader
     now <- round <$> liftIO getPOSIXTime
     gh <- syncHeaders now bb p
+    p' <- managerPeerText p mgr
+    $(logDebugS) "Chain" $ "Syncing headers against peer: " <> p'
     MGetHeaders gh `sendMessage` p
 
 chainMessage :: MonadChain m => ChainMessage -> m ()
 chainMessage (ChainGetBest reply) = getBestBlockHeader >>= atomically . reply
 chainMessage (ChainHeaders p hs) = processHeaders p hs
 chainMessage (ChainPeerConnected p _) = do
+    mgr <- asks (chainConfManager . myReader)
+    p' <- managerPeerText p mgr
+    $(logDebugS) "Chain" $ "New peer connected: " <> p'
     addPeer p
     syncNewPeer
 chainMessage (ChainPeerDisconnected p _) = do

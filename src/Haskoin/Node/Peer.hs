@@ -20,25 +20,24 @@ module Haskoin.Node.Peer
     ) where
 
 import           Conduit                 (ConduitT, awaitForever, foldC, mapM_C,
-                                          runConduit, takeCE, yield, (.|))
+                                          runConduit, takeCE, transPipe, yield,
+                                          (.|))
 import           Control.Monad           (forever, when)
 import           Control.Monad.Logger    (MonadLoggerIO, logErrorS)
-import           Control.Monad.Reader    (runReaderT)
 import           Data.ByteString         (ByteString)
 import qualified Data.ByteString         as B
-import           Data.Conduit.Network    (appSink, appSource)
 import           Data.Serialize          (decode, runGet, runPut)
 import           Data.String.Conversions (cs)
 import           Haskoin                 (Message, MessageHeader (..), Network,
                                           getMessage, putMessage)
-import           Haskoin.Node.Common     (PeerConfig (..), PeerException (..),
-                                          PeerMessage (..), peerString,
-                                          withConnection)
+import           Haskoin.Node.Common     (Conduits (..), PeerConfig (..),
+                                          PeerException (..), PeerMessage (..),
+                                          peerString)
 import           Network.Socket          (SockAddr)
 import           NQE                     (Inbox, PublisherMessage (..), receive,
                                           send)
-import           UnliftIO                (MonadUnliftIO, atomically, link,
-                                          throwIO, withAsync)
+import           UnliftIO                (MonadUnliftIO, atomically, liftIO,
+                                          link, throwIO, withAsync, withRunInIO)
 
 -- | Run peer process in current thread.
 peer ::
@@ -46,15 +45,15 @@ peer ::
     => PeerConfig
     -> Inbox PeerMessage
     -> m ()
-peer pc inbox = withConnection a $ \ad -> runReaderT (peer_session ad) pc
+peer pc inbox = withRunInIO $ \r -> connect a (r . peer_session)
   where
+    connect = peerConfConnect pc
     a = peerConfAddress pc
-    go = forever $ do
-      receive inbox >>= dispatchMessage pc
+    go = forever $ receive inbox >>= dispatchMessage pc
     net = peerConfNetwork pc
     peer_session ad =
-        let ins = appSource ad
-            ons = appSink ad
+        let ins = transPipe liftIO (inboundConduit ad)
+            ons = transPipe liftIO (outboundConduit ad)
             src = runConduit $ ins .| inPeerConduit net a .| mapM_C send_msg
             snk = outPeerConduit net .| ons
          in withAsync src $ \as -> do

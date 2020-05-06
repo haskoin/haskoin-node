@@ -3,33 +3,57 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings     #-}
 {-# LANGUAGE RecordWildCards       #-}
+{-# LANGUAGE TemplateHaskell       #-}
 module Haskoin.NodeSpec
     ( spec
     ) where
 
-import           Control.Monad        (forM_, replicateM, replicateM_)
-import           Control.Monad.Logger (runNoLoggingT)
-import           Control.Monad.Trans  (lift)
-import           Data.Maybe           (isJust)
-import qualified Database.RocksDB     as R
-import           Haskoin              (Block (..), BlockHeader (..),
-                                       BlockNode (..), Network,
-                                       NetworkAddress (..), Version (..),
-                                       btcTest, buildMerkleRoot,
-                                       getGenesisHeader, headerHash,
-                                       sockToHostAddress, txHash)
-import           Haskoin.Node         (Chain, ChainEvent (..), NodeConfig (..),
-                                       NodeEvent (..), OnlinePeer (..), Peer,
-                                       PeerEvent (..), PeerManager,
-                                       chainGetAncestor, chainGetBest,
-                                       chainGetParents, managerGetPeer,
-                                       peerGetBlocks, peerGetTxs, withNode)
-import           Network.Socket       (SockAddr (..))
-import           NQE                  (Inbox, newInbox, receiveMatch, sendSTM)
-import           Test.Hspec           (Spec, describe, it, shouldBe,
-                                       shouldReturn, shouldSatisfy)
-import           UnliftIO             (MonadIO, MonadUnliftIO, throwString,
-                                       withSystemTempDirectory)
+import           Conduit                 (awaitForever, concatMapC, foldC, mapC,
+                                          mapMC, runConduit, takeCE, yield,
+                                          (.|))
+import           Control.Monad           (forM_, forever, replicateM,
+                                          replicateM_)
+import           Control.Monad.Logger    (logDebug, runNoLoggingT)
+import           Control.Monad.Trans     (lift)
+import           Data.ByteString         (ByteString)
+import qualified Data.ByteString         as B
+import           Data.ByteString.Base64  (decodeBase64Lenient)
+import           Data.Either             (fromRight)
+import           Data.Maybe              (isJust, listToMaybe, mapMaybe)
+import           Data.Serialize          (decode, get, runGet, runPut)
+import           Data.String.Conversions (cs)
+import           Data.Time.Clock.POSIX   (getCurrentTime, getPOSIXTime)
+import qualified Database.RocksDB        as R
+import           Haskoin                 (Block (..), BlockHash (..),
+                                          BlockHeader (..), BlockNode (..),
+                                          GetData (..), GetHeaders (..),
+                                          Headers (..), InvType (..),
+                                          InvVector (..), Message (..),
+                                          MessageHeader (..), Network (..),
+                                          NetworkAddress (..), Ping (..),
+                                          Pong (..), VarInt (..), Version (..),
+                                          bchRegTest, btcTest, buildMerkleRoot,
+                                          getGenesisHeader, getMessage,
+                                          headerHash, nodeNetwork, putMessage,
+                                          sockToHostAddress, txHash)
+import           Haskoin.Node            (Chain, ChainEvent (..), Conduits (..),
+                                          NodeConfig (..), NodeEvent (..),
+                                          OnlinePeer (..), Peer, PeerEvent (..),
+                                          PeerManager, WithConnection,
+                                          buildVersion, chainGetAncestor,
+                                          chainGetBest, chainGetParents,
+                                          managerGetPeer, peerGetBlocks,
+                                          peerGetTxs, withConnection, withNode)
+import           Network.Socket          (SockAddr (..))
+import           NQE                     (Inbox, Mailbox, inboxToMailbox,
+                                          newInbox, receive, receiveMatch, send,
+                                          sendSTM)
+import           System.Random           (randomIO, randomRIO)
+import           Test.Hspec              (Spec, describe, it, shouldBe,
+                                          shouldReturn, shouldSatisfy)
+import           UnliftIO                (MonadIO, MonadUnliftIO, liftIO, link,
+                                          throwString, withAsync,
+                                          withSystemTempDirectory)
 
 data TestNode = TestNode
     { testMgr    :: PeerManager
@@ -37,9 +61,59 @@ data TestNode = TestNode
     , nodeEvents :: Inbox NodeEvent
     }
 
+dummyPeerConnect :: Network -> NetworkAddress -> WithConnection
+dummyPeerConnect net ad sa f = do
+    r <- newInbox
+    s <- newInbox
+    let s' = inboxToMailbox s
+    withAsync (go r s') $ \_ -> do
+        let o = awaitForever (`send` r)
+            i = forever (receive s >>= yield)
+        f (Conduits i o) :: IO ()
+  where
+    go :: Inbox ByteString -> Mailbox ByteString -> IO ()
+    go r s = do
+        nonce <- randomIO
+        now <- round <$> liftIO getPOSIXTime
+        let rmt = NetworkAddress 0 (sockToHostAddress sa)
+            ver = buildVersion net nonce 0 ad rmt now
+        runPut (putMessage net (MVersion ver)) `send` s
+        runConduit $
+            forever (receive r >>= yield) .| inc .| concatMapC mockPeerReact .|
+            outc .|
+            awaitForever (`send` s)
+    outc = mapMC $ \msg -> return $ runPut (putMessage net msg)
+    inc =
+        forever $ do
+            x <- takeCE 24 .| foldC
+            case decode x of
+                Left _ -> error "Dummy peer not decode message header"
+                Right (MessageHeader _ _ len _) -> do
+                    y <- takeCE (fromIntegral len) .| foldC
+                    case runGet (getMessage net) $ x `B.append` y of
+                        Left e ->
+                            error $
+                            "Dummy peer could not decode payload: " <> show e
+                        Right msg -> yield msg
+
+mockPeerReact :: Message -> [Message]
+mockPeerReact (MPing (Ping n)) = [MPong (Pong n)]
+mockPeerReact (MVersion _) = [MVerAck]
+mockPeerReact (MGetHeaders (GetHeaders _ _hs _)) = [MHeaders (Headers hs')]
+  where
+    f b = (blockHeader b, VarInt (fromIntegral (length (blockTxns b))))
+    hs' = map f allBlocks
+mockPeerReact (MGetData (GetData ivs)) = mapMaybe f ivs
+  where
+    f (InvVector InvBlock h) = MBlock <$> listToMaybe (filter (l h) allBlocks)
+    f _                      = Nothing
+    l h b = headerHash (blockHeader b) == BlockHash h
+mockPeerReact _ = []
+
+
 spec :: Spec
 spec = do
-    let net = btcTest
+    let net = bchRegTest
     describe "peer manager on test network" $ do
         it "connects to a peer" $
             withTestNode net "connect-one-peer" $ \TestNode {..} -> do
@@ -50,11 +124,11 @@ spec = do
         it "downloads some blocks" $
             withTestNode net "get-blocks" $ \TestNode {..} -> do
                 let h1 =
-                        "000000000babf10e26f6cba54d9c282983f1d1ce7061f7e875b58f8ca47db932"
+                        "3094ed3592a06f3d8e099eed2d9c1192329944f5df4a48acb29e08f12cfbb660"
                     h2 =
-                        "00000000851f278a8b2c466717184aae859af5b83c6f850666afbc349cf61577"
+                        "0c89955fc5c9f98ecc71954f167b938138c90c6a094c4737f2e901669d26763f"
                 p <- waitForPeer nodeEvents
-                pbs <- peerGetBlocks net 30 p [h1, h2]
+                pbs <- peerGetBlocks net 10 p [h1, h2]
                 pbs `shouldSatisfy` isJust
                 let Just [b1, b2] = pbs
                 headerHash (blockHeader b1) `shouldBe` h1
@@ -64,53 +138,39 @@ spec = do
                         buildMerkleRoot (map txHash (blockTxns b))
                 testMerkle b1
                 testMerkle b2
-        it "connects to two peers" $
-            withTestNode net "connect-peers" $ \TestNode {..} ->
-                replicateM_ 2 (waitForPeer nodeEvents) `shouldReturn` ()
-        it "attempts to get inexistent things" $
-            withTestNode net "download-fail" $ \TestNode {..} -> do
-                let hs =
-                        [ "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                        , "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-                        ]
-                p <- waitForPeer nodeEvents
-                peerGetTxs net 30 p hs `shouldReturn` Nothing
     describe "chain on test network" $ do
         it "syncs some headers" $
             withTestNode net "connect-sync" $ \TestNode {..} -> do
-                let h =
-                        "000000009ec921df4bb16aedd11567e27ede3c0b63835b257475d64a059f102b"
-                    hs =
-                        [ headerHash (getGenesisHeader net)
-                        , "0000000005bdbddb59a3cd33b69db94fa67669c41d9d32751512b5d7b68c71cf"
-                        , "00000000185b36fa6e406626a722793bea80531515e0b2a99ff05b73738901f1"
-                        , "000000001ab69b12b73ccdf46c9fbb4489e144b54f1565e42e481c8405077bdd"
-                        ]
-                bns <-
-                    replicateM 4 . receiveMatch nodeEvents $ \case
-                        ChainEvent (ChainBestBlock bn) -> Just bn
+                let bh =
+                        "3bfa0c6da615fc45aa44ddea6854ac19d16f3ca167e0e21ac2cc262a49c9b002"
+                    ah =
+                        "7dc835a78a55fa76f9184dc4f6663a73e418c7afec789c5ae25e432fd7fc8467"
+                bn <-
+                    receiveMatch nodeEvents $ \case
+                        ChainEvent (ChainBestBlock bn)
+                            | nodeHeight bn > 0 -> Just bn
                         _ -> Nothing
                 bb <- chainGetBest testChain
-                nodeHeight bb `shouldSatisfy` (>= 6000)
+                nodeHeight bb `shouldSatisfy` (== 15)
                 an <-
                     maybe (throwString "No ancestor found") return =<<
-                    chainGetAncestor 2357 (last bns) testChain
-                map (headerHash . nodeHeader) bns `shouldBe` hs
-                headerHash (nodeHeader an) `shouldBe` h
+                    chainGetAncestor 10 bn testChain
+                headerHash (nodeHeader bn) `shouldBe` bh
+                headerHash (nodeHeader an) `shouldBe` ah
         it "downloads some block parents" $
             withTestNode net "parents" $ \TestNode {..} -> do
                 let hs =
-                        [ "00000000c74a24e1b1f2c04923c514ed88fc785cf68f52ed0ccffd3c6fe3fbd9"
-                        , "000000007e5c5f40e495186ac4122f2e4ee25788cc36984a5760c55ecb376cb1"
-                        , "00000000a6299059b2bff3479bc569019792e75f3c0f39b10a0bc85eac1b1615"
+                        [ "52e886df7b166d961ac2d3d2d561d806325d51a609dc0a5d9d5fcb65d47906d7"
+                        , "2537a081b9e2b24d217fac2886f387758cb3aa4e4956b3be7ed229bafbb71b0f"
+                        , "7c72f306215a296f9714320a497b1f2cb5f9b99f162d7e04333c243fac9a54d8"
                         ]
                 [_, bn] <-
                     replicateM 2 $
                     receiveMatch nodeEvents $ \case
                         ChainEvent (ChainBestBlock bn) -> Just bn
                         _ -> Nothing
-                nodeHeight bn `shouldBe` 2000
-                ps <- chainGetParents 1997 bn testChain
+                nodeHeight bn `shouldBe` 15
+                ps <- chainGetParents 12 bn testChain
                 length ps `shouldBe` 3
                 forM_ (zip ps hs) $ \(p, h) ->
                     headerHash (nodeHeader p) `shouldBe` h
@@ -120,7 +180,6 @@ waitForPeer inbox =
     receiveMatch inbox $ \case
         PeerEvent (PeerConnected p _) -> Just p
         _ -> Nothing
-
 
 withTestNode ::
        MonadUnliftIO m
@@ -140,18 +199,80 @@ withTestNode net str f =
                     , R.errorIfExists = True
                     , R.compression = R.SnappyCompression
                     }
-        let cfg =
+        let ad = NetworkAddress nodeNetwork (sockToHostAddress (SockAddrInet 0 0))
+            cfg =
                 NodeConfig
                     { nodeConfMaxPeers = 20
                     , nodeConfDB = db
-                    , nodeConfPeers = []
-                    , nodeConfDiscover = True
+                    , nodeConfPeers = [("127.0.0.1", 17486)]
+                    , nodeConfDiscover = False
                     , nodeConfNetAddr = NetworkAddress 0 (sockToHostAddress (SockAddrInet 0 0))
                     , nodeConfNet = net
                     , nodeConfEvents = (`sendSTM` node_inbox)
                     , nodeConfTimeout = 120
                     , nodeConfPeerOld = 48 * 3600
+                    , nodeConfConnect = dummyPeerConnect net ad
                     }
         withNode cfg $ \(mgr, ch) ->
             lift $
             f TestNode {testMgr = mgr, testChain = ch, nodeEvents = node_inbox}
+
+allBlocks :: [Block]
+allBlocks =
+    fromRight (error "Could not decode blocks") $
+    runGet f (decodeBase64Lenient allBlocksBase64)
+  where
+    f = mapM (const get) [1..15]
+
+allBlocksBase64 :: ByteString
+allBlocksBase64 =
+    "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\
+    \wT6Wn6LtY47B39Th44JKsZ8BGJCvc6wAAAAA"

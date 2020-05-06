@@ -354,6 +354,7 @@ connectPeer sa = do
                               } <- asks myConfig
             mgr <- asks myMailbox
             sup <- asks mySupervisor
+            conn <- asks (peerManagerConnect . myConfig)
             nonce <- liftIO randomIO
             bb <- getBestBlock
             now <- round <$> liftIO getPOSIXTime
@@ -365,6 +366,7 @@ connectPeer sa = do
                         { peerConfListen = pub
                         , peerConfNetwork = net
                         , peerConfAddress = sa
+                        , peerConfConnect = conn
                         }
             a <- withRunInIO $ \io -> sup `addChild` io (launch mgr pc inbox p)
             MVersion ver `sendMessage` p
@@ -403,9 +405,9 @@ withConnectLoop mgr act = withAsync go (\a -> link a >> act)
   where
     go =
         forever $ do
-            threadDelay =<<
-                liftIO (randomRIO (2 * 1000 * 1000, 10 * 1000 * 1000))
             PeerManagerConnect `send` mgr
+            threadDelay =<<
+                liftIO (randomRIO (100 * 1000, 10 * 500 * 1000))
 
 -- | Add a peer.
 newPeer :: (MonadIO m, MonadManager m) => SockAddr -> m ()

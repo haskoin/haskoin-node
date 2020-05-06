@@ -21,6 +21,8 @@ module Haskoin.Node
     , Peer
     , Chain
     , PeerManager
+    , WithConnection
+    , Conduits(..)
     , ChainMessage(..)
     , PeerManagerMessage(..)
     , PeerMessage(..)
@@ -47,7 +49,9 @@ module Haskoin.Node
     , chainGetSplitBlock
     , chainBlockMain
     , chainIsSynced
+    , withConnection
     , myVersion
+    , buildVersion
     ) where
 
 import           Control.Monad.Logger (MonadLoggerIO)
@@ -55,13 +59,14 @@ import           Haskoin              (BlockNode (..), Headers (..),
                                        Message (..))
 import           Haskoin.Node.Chain   (chain)
 import           Haskoin.Node.Common  (Chain, ChainConfig (..), ChainEvent (..),
-                                       ChainMessage (..), Host, HostPort,
-                                       NodeConfig (..), NodeEvent (..),
-                                       OnlinePeer (..), Peer, PeerEvent (..),
-                                       PeerException (..), PeerManager,
-                                       PeerManagerConfig (..),
+                                       ChainMessage (..), Conduits (..), Host,
+                                       HostPort, NodeConfig (..),
+                                       NodeEvent (..), OnlinePeer (..), Peer,
+                                       PeerEvent (..), PeerException (..),
+                                       PeerManager, PeerManagerConfig (..),
                                        PeerManagerMessage (..),
-                                       PeerMessage (..), Port, chainBlockMain,
+                                       PeerMessage (..), Port, WithConnection,
+                                       buildVersion, chainBlockMain,
                                        chainGetAncestor, chainGetBest,
                                        chainGetBlock, chainGetParents,
                                        chainGetSplitBlock, chainIsSynced,
@@ -69,7 +74,7 @@ import           Haskoin.Node.Common  (Chain, ChainConfig (..), ChainEvent (..),
                                        managerGetPeers, managerPeerText,
                                        myVersion, peerGetBlocks,
                                        peerGetPublisher, peerGetTxs,
-                                       sendMessage)
+                                       sendMessage, withConnection)
 import           Haskoin.Node.Manager (peerManager)
 import           NQE                  (Inbox, inboxToMailbox, newInbox, sendSTM)
 import           UnliftIO             (MonadUnliftIO, link, withAsync)
@@ -108,6 +113,7 @@ node cfg mgr_inbox ch_inbox = do
                 , peerManagerEvents = mgr_events
                 , peerManagerTimeout = nodeConfTimeout cfg
                 , peerManagerTooOld = nodeConfPeerOld cfg
+                , peerManagerConnect = nodeConfConnect cfg
                 }
     withAsync (peerManager mgr_config mgr_inbox) $ \mgr_async -> do
         link mgr_async

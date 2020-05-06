@@ -15,16 +15,19 @@ Common functions used by Haskoin Node.
 -}
 module Haskoin.Node.Common where
 
+import           Conduit                   (ConduitT)
 import           Control.Monad             (join)
 import           Control.Monad.Trans.Maybe (MaybeT (..), runMaybeT)
-import           Data.Conduit.Network      (AppData, clientSettings,
-                                            runGeneralTCPClient)
+import           Data.ByteString           (ByteString)
+import           Data.Conduit.Network      (appSink, appSource, clientSettings,
+                                            runTCPClient)
 import           Data.Function             (on)
 import           Data.List                 (union)
 import           Data.Maybe                (fromMaybe, isJust)
 import           Data.String.Conversions   (cs)
 import           Data.Text                 (Text)
 import           Data.Time.Clock           (NominalDiffTime, UTCTime)
+import           Data.Void                 (Void)
 import           Data.Word                 (Word32, Word64)
 import           Database.RocksDB          (DB)
 import           Haskoin                   (Block (..), BlockHash,
@@ -106,6 +109,14 @@ type Chain = Mailbox ChainMessage
 -- | Mailbox for peer manager process.
 type PeerManager = Mailbox PeerManagerMessage
 
+data Conduits =
+    Conduits
+        { inboundConduit  :: ConduitT () ByteString IO ()
+        , outboundConduit :: ConduitT ByteString Void IO ()
+        }
+
+type WithConnection = SockAddr -> (Conduits -> IO ()) -> IO ()
+
 -- | General node configuration.
 data NodeConfig = NodeConfig
     { nodeConfMaxPeers :: !Int
@@ -126,6 +137,7 @@ data NodeConfig = NodeConfig
       -- ^ timeout in seconds
     , nodeConfPeerOld  :: !Int
       -- ^ peer disconnect after seconds
+    , nodeConfConnect  :: !WithConnection
     }
 
 -- | Peer manager configuration.
@@ -147,6 +159,7 @@ data PeerManagerConfig =
       -- ^ timeout in seconds
         , peerManagerTooOld   :: !Int
       -- ^ disconnect peers after connected for so long
+        , peerManagerConnect  :: !WithConnection
         }
 
 -- | Messages that can be sent to the peer manager.
@@ -232,6 +245,7 @@ data PeerConfig = PeerConfig
       -- ^ network constants
     , peerConfAddress :: !SockAddr
       -- ^ peer address
+    , peerConfConnect :: !WithConnection
     }
 
 -- | Reasons why a peer may stop working.
@@ -532,14 +546,13 @@ chainHeaders :: MonadIO m => Peer -> [BlockHeader] -> Chain -> m ()
 chainHeaders p hs ch = ChainHeaders p hs `send` ch
 
 -- | Connect to a socket via TCP.
-withConnection ::
-       MonadUnliftIO m => SockAddr -> (AppData -> m a) -> m a
+withConnection :: WithConnection
 withConnection na f =
     fromSockAddr na >>= \case
         Nothing -> throwIO PeerAddressInvalid
-        Just (host, port) ->
+        Just (host, port) -> do
             let cset = clientSettings port (cs host)
-             in runGeneralTCPClient cset f
+            runTCPClient cset $ \ad -> f (Conduits (appSource ad) (appSink ad))
 
 -- | Calculate the median value from a list. The list must not be empty.
 median :: Fractional a => [a] -> Maybe a
