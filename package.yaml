@@ -1,5 +1,5 @@
 name: haskoin-node
-version: 0.12.0
+version: 0.13.0
 synopsis: Haskoin Node P2P library for Bitcoin and Bitcoin Cash
 description: Bitcoin and Bitcoin Cash peer-to-peer protocol library featuring headers-first synchronisation.
 category: Bitcoin, Finance, Network
@@ -22,7 +22,7 @@ dependencies:
   - containers
   - data-default
   - hashable
-  - haskoin-core >= 0.10.1
+  - haskoin-core >= 0.13.3
   - monad-logger
   - mtl
   - network

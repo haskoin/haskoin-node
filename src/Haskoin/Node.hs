@@ -15,33 +15,22 @@ Messages from peers that aren't consumed by the peer manager or chain are
 forwarded to the listen action provided in the node configuration.
 -}
 module Haskoin.Node
-    ( Host
+    ( -- * Types
+      Host
     , Port
     , HostPort
-    , Peer
-    , Chain
-    , PeerManager
-    , WithConnection
-    , Conduits(..)
-    , ChainMessage(..)
-    , PeerManagerMessage(..)
-    , PeerMessage(..)
-    , OnlinePeer(..)
+
+      -- * Node
     , NodeConfig(..)
     , NodeEvent(..)
-    , ChainEvent(..)
-    , PeerEvent(..)
-    , PeerException(..)
     , withNode
     , node
-    , managerGetPeers
-    , managerGetPeer
-    , managerPeerText
-    , killPeer
-    , sendMessage
-    , peerGetPublisher
-    , peerGetBlocks
-    , peerGetTxs
+
+      -- * Header Chain
+    , Chain
+    , ChainMessage
+    , ChainConfig(..)
+    , ChainEvent(..)
     , chainGetBlock
     , chainGetBest
     , chainGetAncestor
@@ -49,7 +38,32 @@ module Haskoin.Node
     , chainGetSplitBlock
     , chainBlockMain
     , chainIsSynced
+
+      -- * Peer Manager
+    , PeerManager
+    , PeerManagerMessage
+    , PeerManagerConfig(..)
+    , PeerEvent(..)
+    , OnlinePeer(..)
+    , managerGetPeers
+    , managerGetPeer
+    , managerPeerText
+
+      -- * Peer
+    , Peer
+    , WithConnection
+    , PeerMessage
+    , PeerConfig(..)
+    , PeerException(..)
+    , Conduits(..)
     , withConnection
+    , killPeer
+    , sendMessage
+    , peerGetPublisher
+    , peerGetBlocks
+    , peerGetTxs
+
+      -- * Misc
     , myVersion
     , buildVersion
     ) where
@@ -62,8 +76,9 @@ import           Haskoin.Node.Common  (Chain, ChainConfig (..), ChainEvent (..),
                                        ChainMessage (..), Conduits (..), Host,
                                        HostPort, NodeConfig (..),
                                        NodeEvent (..), OnlinePeer (..), Peer,
-                                       PeerEvent (..), PeerException (..),
-                                       PeerManager, PeerManagerConfig (..),
+                                       PeerConfig (..), PeerEvent (..),
+                                       PeerException (..), PeerManager,
+                                       PeerManagerConfig (..),
                                        PeerManagerMessage (..),
                                        PeerMessage (..), Port, WithConnection,
                                        buildVersion, chainBlockMain,
