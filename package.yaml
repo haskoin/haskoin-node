@@ -1,12 +1,12 @@
 name: haskoin-node
 version: 0.13.0
-synopsis: Haskoin Node P2P library for Bitcoin and Bitcoin Cash
-description: Bitcoin and Bitcoin Cash peer-to-peer protocol library featuring headers-first synchronisation.
+synopsis: P2P library for Bitcoin and Bitcoin Cash
+description: Please see the README on GitHub at <https://github.com/haskoin/haskoin-node#readme>
 category: Bitcoin, Finance, Network
 author: Jean-Pierre Rupp
 maintainer: jprupp@protonmail.ch
-license: PublicDomain
-license-file: UNLICENSE
+license: MIT
+license-file: LICENSE
 github: haskoin/haskoin.git
 homepage: http://github.com/haskoin/haskoin#readme
 bug-reports: http://github.com/haskoin/haskoin/issues
