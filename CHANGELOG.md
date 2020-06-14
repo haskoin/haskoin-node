@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 ## Unreleased
 ### Changed
 - Use MIT license.
+- Bump haskoin-core.
+- Bump secp256k1-haskell.
+
+### Fixed
+- Fix getting stuck on a single peer.
 
 ## 0.13.0
 ### Changed

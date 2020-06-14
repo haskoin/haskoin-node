@@ -22,7 +22,7 @@ dependencies:
   - containers
   - data-default
   - hashable
-  - haskoin-core >= 0.13.3
+  - haskoin-core >= 0.14.1
   - monad-logger
   - mtl
   - network

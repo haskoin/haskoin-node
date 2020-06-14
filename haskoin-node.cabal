@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: bd43adf379e8b10860f2a740b06baadd65122d9d6af26420fa65085d384bbe8b
+-- hash: 730a1760814bbacacad113bf2cbb76560cd08cfd0562339e1261f56b414ad405
 
 name:           haskoin-node
 version:        0.13.0
@@ -46,7 +46,7 @@ library
     , containers
     , data-default
     , hashable
-    , haskoin-core >=0.13.3
+    , haskoin-core >=0.14.1
     , monad-logger
     , mtl
     , network
@@ -82,7 +82,7 @@ test-suite spec
     , containers
     , data-default
     , hashable
-    , haskoin-core >=0.13.3
+    , haskoin-core >=0.14.1
     , haskoin-node
     , hspec
     , monad-logger

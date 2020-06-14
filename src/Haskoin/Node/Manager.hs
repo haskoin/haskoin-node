@@ -178,7 +178,7 @@ managerMessage (PeerManagerPeerMessage p (MVersion v)) = do
             o <- ExceptT . atomically $ setPeerVersion b p v
             when (onlinePeerConnected o) $ announcePeer p
     case e of
-        Right () -> do
+        Right () ->
             MVerAck `sendMessage` p
         Left x -> do
             $(logErrorS) "PeerManager" $
