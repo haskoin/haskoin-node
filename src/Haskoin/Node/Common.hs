@@ -167,7 +167,7 @@ data PeerManagerConfig =
 
 -- | Messages that can be sent to the peer manager.
 data PeerManagerMessage
-    = PeerManagerConnect
+    = PeerManagerConnect !SockAddr
       -- ^ try to connect to peers
     | PeerManagerGetPeers !(Listen [OnlinePeer])
       -- ^ get all connected peers
@@ -354,10 +354,6 @@ killPeer e p = KillPeer e `send` p
 -- | Internal function used by manager to check peers periodically.
 managerCheck :: MonadIO m => Peer -> PeerManager -> m ()
 managerCheck p mgr = PeerManagerCheckPeer p `send` mgr
-
--- | Internal function used to ask manager to connect to a new peer.
-managerConnect :: MonadIO m => PeerManager ->  m ()
-managerConnect mgr = PeerManagerConnect `send` mgr
 
 -- | Set the best block that the manager knows about.
 managerSetBest :: MonadIO m => BlockHeight -> PeerManager -> m ()

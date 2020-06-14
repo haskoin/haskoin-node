@@ -29,7 +29,7 @@ import           Control.Monad.Trans       (lift)
 import           Control.Monad.Trans.Maybe (MaybeT (..), runMaybeT)
 import           Data.Bits                 ((.&.))
 import           Data.List                 (find, nub, sort)
-import           Data.Maybe                (isJust, isNothing)
+import           Data.Maybe                (isJust)
 import           Data.Set                  (Set)
 import qualified Data.Set                  as Set
 import           Data.String.Conversions   (cs)
@@ -242,14 +242,9 @@ managerMessage (PeerManagerPeerMessage p m) =
 managerMessage (PeerManagerBestBlock h) =
     putBestBlock h
 
-managerMessage PeerManagerConnect =
-    reportSlow 0.2 "PeerManager" "Connect" $ do
-    l <- length <$> getConnectedPeers
-    x <- asks (peerManagerMaxPeers . myConfig)
-    when (l < x) $
-        getNewPeer >>= \case
-            Nothing -> return ()
-            Just sa -> connectPeer sa
+managerMessage (PeerManagerConnect sa) =
+    reportSlow 0.2 "PeerManager" "Connect" $
+    connectPeer sa
 
 managerMessage (PeerManagerPeerDied a e) =
     reportSlow 0.2 "PeerManager" "Peer Offline" $
@@ -352,7 +347,6 @@ announcePeer p = do
 
 getNewPeer :: (MonadUnliftIO m, MonadManager m) => m (Maybe SockAddr)
 getNewPeer =
-    reportSlow 0.2 "PeerManager" "Get New Peer" $
     runMaybeT $ lift loadPeers >> go
   where
     go = do
@@ -362,11 +356,11 @@ getNewPeer =
         let xs = Set.toList ks
         a <- liftIO $ randomRIO (0, length xs - 1)
         let p = xs !! a
-        atomically . modifyTVar b $ Set.delete p
         o <- asks onlinePeers
-        atomically (findPeerAddress o p) >>= \case
-            Nothing -> return p
-            Just _ -> go
+        m <- atomically $ do
+            modifyTVar b $ Set.delete p
+            findPeerAddress o p
+        maybe (return p) (const go) m
 
 
 connectPeer :: (MonadUnliftIO m, MonadManager m) => SockAddr -> m ()
@@ -429,12 +423,18 @@ withPeerLoop _ p mgr = withAsync go
                 liftIO (randomRIO (30 * 1000 * 1000, 90 * 1000 * 1000))
             PeerManagerCheckPeer p `send` mgr
 
-withConnectLoop :: (MonadLogger m, MonadUnliftIO m) => PeerManager -> m a -> m a
+withConnectLoop :: (MonadUnliftIO m, MonadManager m)
+                => PeerManager -> m a -> m a
 withConnectLoop mgr act = withAsync go (\a -> link a >> act)
   where
     go =
         forever $ do
-            PeerManagerConnect `send` mgr
+            l <- length <$> getConnectedPeers
+            x <- asks (peerManagerMaxPeers . myConfig)
+            when (l < x) $
+                getNewPeer >>= \case
+                    Nothing -> return ()
+                    Just sa -> PeerManagerConnect sa `send` mgr
             threadDelay =<<
                 liftIO (randomRIO (100 * 1000, 10 * 500 * 1000))
 
@@ -443,8 +443,10 @@ newPeer :: (MonadIO m, MonadManager m) => SockAddr -> m ()
 newPeer sa = do
     b <- asks knownPeers
     o <- asks onlinePeers
-    i <- atomically $ findPeerAddress o sa
-    when (isNothing i) $ atomically . modifyTVar b $ Set.insert sa
+    atomically $
+        findPeerAddress o sa >>= \case
+            Just _ -> return ()
+            Nothing -> modifyTVar b $ Set.insert sa
 
 -- | Get static network seeds.
 networkSeeds :: Network -> [HostPort]
