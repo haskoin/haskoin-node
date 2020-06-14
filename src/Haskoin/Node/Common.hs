@@ -573,13 +573,14 @@ managerPeerText p mgr =
         Nothing -> return "???"
         Just op -> return $ cs (show (onlinePeerAddress op))
 
-reportSlow :: MonadLoggerIO m => NominalDiffTime -> Text -> m a -> m a
-reportSlow mx msg action = do
+reportSlow :: MonadLoggerIO m
+           => NominalDiffTime -> Text -> Text -> m a -> m a
+reportSlow mx name msg action = do
     start <- liftIO getCurrentTime
     x <- action
     stop <- liftIO getCurrentTime
     let diff = diffUTCTime stop start
     when (diff > mx) $
-        $(logDebugS) "Node" $
+        $(logDebugS) name $
         msg <> " [slow]: " <> cs (show diff)
     return x

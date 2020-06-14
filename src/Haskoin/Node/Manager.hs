@@ -120,7 +120,7 @@ peerManager cfg inbox =
                         o <- asks onlinePeers
                         atomically $ setLastMessage o now p
                     _ -> return ()
-                reportSlow 0.2 "managerMessage" $ managerMessage m
+                managerMessage m
     f (a, mex) = PeerManagerPeerDied a mex `sendSTM` mgr
 
 putBestBlock :: MonadManager m => BlockHeight -> m ()
@@ -173,7 +173,8 @@ managerEvent e = asks (peerManagerEvents . myConfig) >>= \l -> atomically $ l e
 
 managerMessage :: (MonadUnliftIO m, MonadManager m) => PeerManagerMessage -> m ()
 
-managerMessage (PeerManagerPeerMessage p (MVersion v)) = do
+managerMessage (PeerManagerPeerMessage p (MVersion v)) =
+    reportSlow 0.2 "PeerManager" "Version" $ do
     b <- asks onlinePeers
     s <- atomically $ peerString b p
     e <- runExceptT $ do
@@ -188,7 +189,8 @@ managerMessage (PeerManagerPeerMessage p (MVersion v)) = do
                 "Version rejected for peer " <> s <> ": " <> cs (show x)
             killPeer x p
 
-managerMessage (PeerManagerPeerMessage p MVerAck) = do
+managerMessage (PeerManagerPeerMessage p MVerAck) =
+    reportSlow 0.2 "PeerManager" "VerAck" $ do
     b <- asks onlinePeers
     s <- atomically $ peerString b p
     atomically (setPeerVerAck b p) >>= \case
@@ -200,6 +202,7 @@ managerMessage (PeerManagerPeerMessage p MVerAck) = do
             killPeer UnknownPeer p
 
 managerMessage (PeerManagerPeerMessage p (MAddr (Addr nas))) =
+    reportSlow 0.2 "PeerManager" "Addresses" $
     asks (peerManagerDiscover . myConfig) >>= \discover -> do
         b <- asks onlinePeers
         s <- atomically $ peerString b p
@@ -213,7 +216,8 @@ managerMessage (PeerManagerPeerMessage p (MAddr (Addr nas))) =
                     <> " from peer " <> s
                 newPeer a
 
-managerMessage (PeerManagerPeerMessage p m@(MPong (Pong n))) = do
+managerMessage (PeerManagerPeerMessage p m@(MPong (Pong n))) =
+    reportSlow 0.2 "PeerManager" "Pong" $ do
     b <- asks onlinePeers
     s <- atomically $ peerString b p
     $(logDebugS) "PeerManager" $
@@ -223,7 +227,8 @@ managerMessage (PeerManagerPeerMessage p m@(MPong (Pong n))) = do
         Nothing -> forwardMessage p m
         Just _ -> return ()
 
-managerMessage (PeerManagerPeerMessage p (MPing (Ping n))) = do
+managerMessage (PeerManagerPeerMessage p (MPing (Ping n))) =
+    reportSlow 0.2 "PeerManager" "Ping" $ do
     b <- asks onlinePeers
     s <- atomically $ peerString b p
     $(logDebugS) "PeerManager" $
@@ -231,12 +236,14 @@ managerMessage (PeerManagerPeerMessage p (MPing (Ping n))) = do
     MPong (Pong n) `sendMessage` p
 
 managerMessage (PeerManagerPeerMessage p m) =
+    reportSlow 0.2 "PeerManager" "Forward" $
     forwardMessage p m
 
 managerMessage (PeerManagerBestBlock h) =
     putBestBlock h
 
-managerMessage PeerManagerConnect = do
+managerMessage PeerManagerConnect =
+    reportSlow 0.2 "PeerManager" "Connect" $ do
     l <- length <$> getConnectedPeers
     x <- asks (peerManagerMaxPeers . myConfig)
     when (l < x) $
@@ -245,17 +252,21 @@ managerMessage PeerManagerConnect = do
             Just sa -> connectPeer sa
 
 managerMessage (PeerManagerPeerDied a e) =
+    reportSlow 0.2 "PeerManager" "Peer Offline" $
     processPeerOffline a e
 
-managerMessage (PeerManagerGetPeers reply) = do
+managerMessage (PeerManagerGetPeers reply) =
+    reportSlow 0.2 "PeerManager" "Get Connected Peers" $ do
     ps <- getConnectedPeers
     atomically $ reply ps
 
-managerMessage (PeerManagerGetOnlinePeer p reply) = do
+managerMessage (PeerManagerGetOnlinePeer p reply) =
+    reportSlow 0.2 "PeerManager" "Get Online Peer" $ do
     b <- asks onlinePeers
     atomically $ findPeer b p >>= reply
 
 managerMessage (PeerManagerCheckPeer p) =
+    reportSlow 0.2 "PeerManager" "Check Peer" $
     checkPeer p
 
 checkPeer :: MonadManager m => Peer -> m ()

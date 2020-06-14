@@ -86,7 +86,7 @@ chain cfg inbox = do
         getBestBlockHeader >>= chainEvent . ChainBestBlock
         forever $ do
             msg <- receive inbox
-            reportSlow 0.2 "chainMessage" $ chainMessage msg
+            reportSlow 0.2 "Chain" "chainMessage" $ chainMessage msg
 
 chainEvent :: MonadChain m => ChainEvent -> m ()
 chainEvent e = do
