@@ -138,7 +138,6 @@ node cfg mgr_inbox ch_inbox = do
                     , chainConfNetwork = nodeConfNet cfg
                     , chainConfEvents = chain_events
                     , chainConfTimeout = nodeConfTimeout cfg
-                    , chainConfManager = mgr
                     }
         chain chain_config ch_inbox
   where

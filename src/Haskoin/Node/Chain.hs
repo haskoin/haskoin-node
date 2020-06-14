@@ -22,8 +22,7 @@ module Haskoin.Node.Chain
     ( chain
     ) where
 
-import           Control.Monad             (forM_, forever, guard, unless, void,
-                                            when)
+import           Control.Monad             (forever, guard, void, when)
 import           Control.Monad.Except      (runExceptT, throwError)
 import           Control.Monad.Logger      (MonadLoggerIO, logDebugS, logErrorS,
                                             logInfoS)
@@ -46,15 +45,13 @@ import           Database.RocksDB.Query    (Key, KeyValue, insert, insertOp,
 import           Haskoin                   (BlockHash, BlockHeader (..),
                                             BlockHeaders (..), BlockNode (..),
                                             GetHeaders (..), Message (..),
-                                            Network, Timestamp, blockHashToHex,
-                                            blockLocator, connectBlocks,
-                                            genesisNode, getAncestor,
-                                            headerHash, splitPoint)
+                                            Network, Timestamp, blockLocator,
+                                            connectBlocks, genesisNode,
+                                            getAncestor, headerHash, splitPoint)
 import           Haskoin.Node.Common       (Chain, ChainConfig (..),
                                             ChainEvent (..), ChainMessage (..),
                                             Peer, PeerException (..), killPeer,
-                                            managerPeerText, myVersion,
-                                            sendMessage)
+                                            myVersion, sendMessage)
 import           NQE                       (Inbox, inboxToMailbox, receive,
                                             send)
 import           System.Random             (randomRIO)
@@ -65,8 +62,7 @@ import           UnliftIO                  (MonadIO, MonadUnliftIO, TVar,
 import           UnliftIO.Concurrent       (threadDelay)
 import           UnliftIO.Resource         (runResourceT)
 
-type MonadChain m
-     = (MonadLoggerIO m, MonadChainLogic ChainConfig Peer m)
+type MonadChain m = (MonadLoggerIO m, MonadChainLogic ChainConfig Peer m)
 
 -- | Launch process to synchronize block headers in current thread.
 chain ::
@@ -75,6 +71,7 @@ chain ::
     -> Inbox ChainMessage
     -> m ()
 chain cfg inbox = do
+    $(logDebugS) "Chain" "Starting chain actor"
     st <-
         newTVarIO
             ChainState {chainSyncing = Nothing, mySynced = False, newPeers = []}
@@ -87,7 +84,11 @@ chain cfg inbox = do
     run = do
         initChainDB net
         getBestBlockHeader >>= chainEvent . ChainBestBlock
-        forever (receive inbox >>= chainMessage)
+        forever $ do
+            $(logDebugS) "Chain" "Awaiting message…"
+            msg <- receive inbox
+            $(logDebugS) "Chain" "Reacting to message…"
+            chainMessage msg
 
 chainEvent :: MonadChain m => ChainEvent -> m ()
 chainEvent e = do
@@ -103,49 +104,34 @@ chainEvent e = do
 
 processHeaders ::
        MonadChain m => Peer -> [BlockHeader] -> m ()
-processHeaders p hs =
-    void . runMaybeT $ do
-        net <- asks (chainConfNetwork . myReader)
-        mgr <- asks (chainConfManager . myReader)
-        p' <- managerPeerText p mgr
-        unless (null hs) $
-            forM_ (zip [(1 :: Int) ..] hs) $ \(i, h) ->
-                $(logDebugS) "Chain" $
-                "Importing " <> cs (show i) <> "/" <> cs (show (length hs)) <>
-                " header " <>
-                blockHashToHex (headerHash h) <>
-                " from peer " <>
-                p'
-        now <- round <$> liftIO getPOSIXTime
-        pbest <- getBestBlockHeader
-        importHeaders net now hs >>= \case
-            Left e -> do
-                $(logErrorS) "Chain" $
-                    "Could not connect received headers from peer " <> p'
-                e `killPeer` p
-            Right done -> do
-                setLastReceived now
-                best <- getBestBlockHeader
-                when (nodeHeader pbest /= nodeHeader best) . chainEvent $
-                    ChainBestBlock best
-                if done
-                    then do
-                        MSendHeaders `sendMessage` p
-                        finishPeer p
-                        syncNewPeer
-                        syncNotif
-                    else do
-                        syncPeer p
+processHeaders p hs = void . runMaybeT $ do
+    net <- asks (chainConfNetwork . myReader)
+    now <- round <$> liftIO getPOSIXTime
+    pbest <- getBestBlockHeader
+    importHeaders net now hs >>= \case
+        Left e -> do
+            $(logErrorS) "Chain" "Could not connect headers"
+            e `killPeer` p
+        Right done -> do
+            setLastReceived now
+            best <- getBestBlockHeader
+            when (nodeHeader pbest /= nodeHeader best) $
+                chainEvent (ChainBestBlock best)
+            if done
+                then do
+                    MSendHeaders `sendMessage` p
+                    finishPeer p
+                    syncNewPeer
+                    syncNotif
+                else syncPeer p
 
 syncNewPeer :: MonadChain m => m ()
 syncNewPeer =
-    getSyncingPeer >>= \case
-        Nothing -> do
-            nextPeer >>= \case
-                Nothing ->
-                    $(logDebugS) "Chain" "No more peers to sync headers against"
-                Just p -> syncPeer p
-        Just _ -> return ()
+    getSyncingPeer >>= \s ->
+    when (isNothing s) $
+    nextPeer >>= \case
+        Nothing -> $(logDebugS) "Chain" "No more peers to sync against"
+        Just p -> syncPeer p
 
 syncNotif :: MonadChain m => m ()
 syncNotif =
@@ -154,66 +140,76 @@ syncNotif =
 
 syncPeer :: MonadChain m => Peer -> m ()
 syncPeer p = do
-    mgr <- asks (chainConfManager . myReader)
-    bb <-
-        chainSyncingPeer >>= \case
-            Just ChainSync {chainSyncPeer = p2, chainHighest = Just g}
-                | p == p2 -> return g
-            _ -> getBestBlockHeader
+    bb <- chainSyncingPeer >>= \case
+        Just ChainSync {chainSyncPeer = s, chainHighest = Just g}
+            | p == s -> return g
+        _ -> getBestBlockHeader
     now <- round <$> liftIO getPOSIXTime
     gh <- syncHeaders now bb p
-    p' <- managerPeerText p mgr
-    $(logDebugS) "Chain" $ "Syncing headers against peer: " <> p'
+    $(logDebugS) "Chain" "Requesting headers…"
     MGetHeaders gh `sendMessage` p
 
 chainMessage :: MonadChain m => ChainMessage -> m ()
-chainMessage (ChainGetBest reply) = getBestBlockHeader >>= atomically . reply
-chainMessage (ChainHeaders p hs) = processHeaders p hs
+
+chainMessage (ChainGetBest reply) = do
+    $(logDebugS) "Chain" "Replying to best block header query"
+    getBestBlockHeader >>= atomically . reply
+
+chainMessage (ChainHeaders p hs) = do
+    $(logDebugS) "Chain" $
+        "Processing " <> cs (show (length hs)) <> " incoming headers"
+    processHeaders p hs
+
 chainMessage (ChainPeerConnected p _) = do
-    mgr <- asks (chainConfManager . myReader)
-    p' <- managerPeerText p mgr
-    $(logDebugS) "Chain" $ "New peer connected: " <> p'
+    $(logDebugS) "Chain" "Peer connected"
     addPeer p
     syncNewPeer
+
 chainMessage (ChainPeerDisconnected p _) = do
+    $(logDebugS) "Chain" "Peer disconnected"
     finishPeer p
     syncNewPeer
+
 chainMessage (ChainGetAncestor h n reply) = do
+    $(logDebugS) "Chain" "Replying to block ancestor query"
     a <- getAncestor h n
     atomically $ reply a
+
 chainMessage (ChainGetSplit l r reply) = do
+    $(logDebugS) "Chain" "Replying to block split point query"
     s <- splitPoint l r
     atomically $ reply s
+
 chainMessage (ChainGetBlock h reply) = do
+    $(logDebugS) "Chain" "Replying to block header query"
     m <- getBlockHeader h
     atomically $ reply m
+
 chainMessage (ChainIsSynced reply) = do
+    $(logDebugS) "Chain" "Replying to sync status query"
     s <- isSynced
     atomically $ reply s
+
 chainMessage ChainPing = do
+    $(logDebugS) "Chain" "Received ping"
     ChainConfig {chainConfTimeout = to} <- asks myReader
     now <- round <$> liftIO getPOSIXTime
     chainSyncingPeer >>= \case
-        Nothing -> return ()
         Just ChainSync {chainSyncPeer = p, chainTimestamp = t}
             | now - t > fromIntegral to -> do
-                mgr <- asks (chainConfManager . myReader)
-                p' <- managerPeerText p mgr
                 $(logErrorS) "Chain" $
                     "Syncing peer timed out after " <> cs (show (now - t)) <>
-                    " seconds: " <>
-                    p'
+                    " seconds: "
                 PeerTimeout `killPeer` p
-            | otherwise -> return ()
+        _ -> return ()
 
 withSyncLoop :: (MonadUnliftIO m, MonadLoggerIO m) => Chain -> m a -> m a
 withSyncLoop ch f = withAsync go $ \a -> link a >> f
   where
-    go =
-        forever $ do
-            threadDelay =<<
-                liftIO (randomRIO (2 * 1000 * 1000, 20 * 1000 * 1000))
-            ChainPing `send` ch
+    go = forever $ do
+        delay <- liftIO (randomRIO (2 * 1000 * 1000, 20 * 1000 * 1000))
+        threadDelay delay
+        ChainPing `send` ch
 
 -- | Version of the database.
 dataVersion :: Word32

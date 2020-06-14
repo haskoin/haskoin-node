@@ -183,8 +183,6 @@ data PeerManagerMessage
 data ChainConfig = ChainConfig
     { chainConfDB      :: !DB
       -- ^ database handle
-    , chainConfManager :: !PeerManager
-      -- ^ peer manager
     , chainConfNetwork :: !Network
       -- ^ network constants
     , chainConfEvents  :: !(Listen ChainEvent)
