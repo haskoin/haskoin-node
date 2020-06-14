@@ -3,6 +3,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings     #-}
 {-# LANGUAGE RankNTypes            #-}
+{-# LANGUAGE TemplateHaskell       #-}
 {-|
 Module      : Network.Haskoin.Node.Common
 Copyright   : No rights reserved
@@ -16,7 +17,8 @@ Common functions used by Haskoin Node.
 module Haskoin.Node.Common where
 
 import           Conduit                   (ConduitT)
-import           Control.Monad             (join)
+import           Control.Monad             (join, when)
+import           Control.Monad.Logger      (MonadLoggerIO, logDebugS)
 import           Control.Monad.Trans.Maybe (MaybeT (..), runMaybeT)
 import           Data.ByteString           (ByteString)
 import           Data.Conduit.Network      (appSink, appSource, clientSettings,
@@ -26,7 +28,8 @@ import           Data.List                 (union)
 import           Data.Maybe                (fromMaybe, isJust)
 import           Data.String.Conversions   (cs)
 import           Data.Text                 (Text)
-import           Data.Time.Clock           (NominalDiffTime, UTCTime)
+import           Data.Time.Clock           (NominalDiffTime, UTCTime,
+                                            diffUTCTime, getCurrentTime)
 import           Data.Void                 (Void)
 import           Data.Word                 (Word32, Word64)
 import           Database.RocksDB          (DB)
@@ -569,3 +572,14 @@ managerPeerText p mgr =
     managerGetPeer p mgr >>= \case
         Nothing -> return "???"
         Just op -> return $ cs (show (onlinePeerAddress op))
+
+reportSlow :: MonadLoggerIO m => NominalDiffTime -> Text -> m a -> m a
+reportSlow mx msg action = do
+    start <- liftIO getCurrentTime
+    x <- action
+    stop <- liftIO getCurrentTime
+    let diff = diffUTCTime stop start
+    when (diff > mx) $
+        $(logDebugS) "Node" $
+        msg <> " [slow]: " <> cs (show diff)
+    return x

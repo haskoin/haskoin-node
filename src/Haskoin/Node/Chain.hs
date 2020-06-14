@@ -51,7 +51,7 @@ import           Haskoin                   (BlockHash, BlockHeader (..),
 import           Haskoin.Node.Common       (Chain, ChainConfig (..),
                                             ChainEvent (..), ChainMessage (..),
                                             Peer, PeerException (..), killPeer,
-                                            myVersion, sendMessage)
+                                            myVersion, reportSlow, sendMessage)
 import           NQE                       (Inbox, inboxToMailbox, receive,
                                             send)
 import           System.Random             (randomRIO)
@@ -86,7 +86,7 @@ chain cfg inbox = do
         getBestBlockHeader >>= chainEvent . ChainBestBlock
         forever $ do
             msg <- receive inbox
-            chainMessage msg
+            reportSlow 0.2 "chainMessage" $ chainMessage msg
 
 chainEvent :: MonadChain m => ChainEvent -> m ()
 chainEvent e = do

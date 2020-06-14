@@ -50,8 +50,8 @@ import           Haskoin.Node.Common       (HostPort, OnlinePeer (..), Peer,
                                             PeerManagerConfig (..),
                                             PeerManagerMessage (..),
                                             buildVersion, killPeer,
-                                            managerCheck, sendMessage,
-                                            toSockAddr)
+                                            managerCheck, reportSlow,
+                                            sendMessage, toSockAddr)
 import           Haskoin.Node.Peer         (peer)
 import           Network.Socket            (SockAddr (..))
 import           NQE                       (Child, Inbox, Strategy (..),
@@ -120,7 +120,7 @@ peerManager cfg inbox =
                         o <- asks onlinePeers
                         atomically $ setLastMessage o now p
                     _ -> return ()
-                managerMessage m
+                reportSlow 0.2 "managerMessage" $ managerMessage m
     f (a, mex) = PeerManagerPeerDied a mex `sendSTM` mgr
 
 putBestBlock :: MonadManager m => BlockHeight -> m ()
