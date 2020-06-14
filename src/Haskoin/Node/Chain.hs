@@ -51,7 +51,7 @@ import           Haskoin                   (BlockHash, BlockHeader (..),
 import           Haskoin.Node.Common       (Chain, ChainConfig (..),
                                             ChainEvent (..), ChainMessage (..),
                                             Peer, PeerException (..), killPeer,
-                                            myVersion, reportSlow, sendMessage)
+                                            myVersion, sendMessage)
 import           NQE                       (Inbox, inboxToMailbox, receive,
                                             send)
 import           System.Random             (randomRIO)
@@ -72,10 +72,12 @@ chain ::
     -> m ()
 chain cfg inbox = do
     $(logDebugS) "Chain" "Starting chain actor"
-    st <-
-        newTVarIO
-            ChainState {chainSyncing = Nothing, mySynced = False, newPeers = []}
-    let rd = ChainReader {myReader = cfg, myChainDB = db, chainState = st}
+    st <- newTVarIO ChainState { chainSyncing = Nothing
+                               , mySynced = False
+                               , newPeers = [] }
+    let rd = ChainReader { myReader = cfg
+                         , myChainDB = db
+                         , chainState = st}
     withSyncLoop ch $ run `runReaderT` rd
   where
     net = chainConfNetwork cfg
@@ -83,10 +85,11 @@ chain cfg inbox = do
     ch = inboxToMailbox inbox
     run = do
         initChainDB net
-        getBestBlockHeader >>= chainEvent . ChainBestBlock
+        getBestBlockHeader >>=
+            chainEvent . ChainBestBlock
         forever $ do
             msg <- receive inbox
-            reportSlow 0.2 "Chain" "chainMessage" $ chainMessage msg
+            chainMessage msg
 
 chainEvent :: MonadChain m => ChainEvent -> m ()
 chainEvent e = do
