@@ -85,9 +85,7 @@ chain cfg inbox = do
         initChainDB net
         getBestBlockHeader >>= chainEvent . ChainBestBlock
         forever $ do
-            $(logDebugS) "Chain" "Awaiting message…"
             msg <- receive inbox
-            $(logDebugS) "Chain" "Reacting to message…"
             chainMessage msg
 
 chainEvent :: MonadChain m => ChainEvent -> m ()
@@ -151,8 +149,7 @@ syncPeer p = do
 
 chainMessage :: MonadChain m => ChainMessage -> m ()
 
-chainMessage (ChainGetBest reply) = do
-    $(logDebugS) "Chain" "Replying to best block header query"
+chainMessage (ChainGetBest reply) =
     getBestBlockHeader >>= atomically . reply
 
 chainMessage (ChainHeaders p hs) = do
@@ -171,35 +168,30 @@ chainMessage (ChainPeerDisconnected p _) = do
     syncNewPeer
 
 chainMessage (ChainGetAncestor h n reply) = do
-    $(logDebugS) "Chain" "Replying to block ancestor query"
     a <- getAncestor h n
     atomically $ reply a
 
 chainMessage (ChainGetSplit l r reply) = do
-    $(logDebugS) "Chain" "Replying to block split point query"
     s <- splitPoint l r
     atomically $ reply s
 
 chainMessage (ChainGetBlock h reply) = do
-    $(logDebugS) "Chain" "Replying to block header query"
     m <- getBlockHeader h
     atomically $ reply m
 
 chainMessage (ChainIsSynced reply) = do
-    $(logDebugS) "Chain" "Replying to sync status query"
     s <- isSynced
     atomically $ reply s
 
 chainMessage ChainPing = do
-    $(logDebugS) "Chain" "Received ping"
     ChainConfig {chainConfTimeout = to} <- asks myReader
     now <- round <$> liftIO getPOSIXTime
     chainSyncingPeer >>= \case
         Just ChainSync {chainSyncPeer = p, chainTimestamp = t}
             | now - t > fromIntegral to -> do
                 $(logErrorS) "Chain" $
-                    "Syncing peer timed out after " <> cs (show (now - t)) <>
-                    " seconds: "
+                    "Syncing peer timed out after "
+                    <> cs (show (now - t)) <> " seconds: "
                 PeerTimeout `killPeer` p
         _ -> return ()
 

@@ -88,8 +88,7 @@ peerManager ::
     => PeerManagerConfig
     -> Inbox PeerManagerMessage
     -> m ()
-peerManager cfg inbox = do
-    $(logDebugS) "PeerManager" "Starting peer manager process…"
+peerManager cfg inbox =
     withSupervisor (Notify f) $ \sup -> do
         bb <- newTVarIO 0
         kp <- newTVarIO Set.empty
@@ -111,9 +110,9 @@ peerManager cfg inbox = do
         putBestBlock <=< receiveMatch inbox $ \case
             PeerManagerBestBlock b -> Just b
             _ -> Nothing
+        $(logDebugS) "PeerManager" "Starting peer manager process…"
         withConnectLoop mgr $
             forever $ do
-                $(logDebugS) "PeerManager" "Awaiting message…"
                 m <- receive inbox
                 case m of
                     PeerManagerPeerMessage p _ -> do
@@ -121,15 +120,12 @@ peerManager cfg inbox = do
                         o <- asks onlinePeers
                         atomically $ setLastMessage o now p
                     _ -> return ()
-                $(logDebugS) "PeerManager" "Reacting to message…"
                 managerMessage m
     f (a, mex) = PeerManagerPeerDied a mex `sendSTM` mgr
 
 putBestBlock :: MonadManager m => BlockHeight -> m ()
 putBestBlock bb = do
     b <- asks myBestBlock
-    $(logDebugS) "PeerManager" $
-        "Setting best block to: " <> cs (show bb)
     atomically $ writeTVar b bb
 
 getBestBlock :: MonadManager m => m BlockHeight
@@ -207,7 +203,6 @@ managerMessage (PeerManagerPeerMessage p (MAddr (Addr nas))) =
     asks (peerManagerDiscover . myConfig) >>= \discover -> do
         b <- asks onlinePeers
         s <- atomically $ peerString b p
-        $(logDebugS) "Peer Manager" $ "Received addresses from: " <> s
         when discover $ do
             let sas = map (hostToSockAddr . naAddress . snd) nas
             forM_ (zip [(1 :: Int) ..] sas) $ \(i, a) -> do
@@ -231,21 +226,17 @@ managerMessage (PeerManagerPeerMessage p m@(MPong (Pong n))) = do
 managerMessage (PeerManagerPeerMessage p (MPing (Ping n))) = do
     b <- asks onlinePeers
     s <- atomically $ peerString b p
-    $(logDebugS) "Peer Manager" $
-        "Sending pong " <> cs (show n) <> " to: " <> s
+    $(logDebugS) "PeerManager" $
+        "Responding to ping " <> cs (show n) <> " to: " <> s
     MPong (Pong n) `sendMessage` p
 
-managerMessage (PeerManagerPeerMessage p m) = do
-    b <- asks onlinePeers
-    s <- atomically $ peerString b p
-    $(logDebugS) "PeerManager" $ "Forwarding message from: " <> s
+managerMessage (PeerManagerPeerMessage p m) =
     forwardMessage p m
 
 managerMessage (PeerManagerBestBlock h) =
     putBestBlock h
 
 managerMessage PeerManagerConnect = do
-    $(logDebugS) "PeerManager" "Connect to new peer if possible"
     l <- length <$> getConnectedPeers
     x <- asks (peerManagerMaxPeers . myConfig)
     when (l < x) $
@@ -257,19 +248,14 @@ managerMessage (PeerManagerPeerDied a e) =
     processPeerOffline a e
 
 managerMessage (PeerManagerGetPeers reply) = do
-    $(logDebugS) "PeerManager" "Responding to request for connected peers"
     ps <- getConnectedPeers
     atomically $ reply ps
 
 managerMessage (PeerManagerGetOnlinePeer p reply) = do
-    $(logDebugS) "PeerManager" "Responding to request for online peer"
     b <- asks onlinePeers
     atomically $ findPeer b p >>= reply
 
-managerMessage (PeerManagerCheckPeer p) = do
-    b <- asks onlinePeers
-    s <- atomically $ peerString b p
-    $(logDebugS) "PeerManager" $ "Checking peer: " <> s
+managerMessage (PeerManagerCheckPeer p) =
     checkPeer p
 
 checkPeer :: MonadManager m => Peer -> m ()
