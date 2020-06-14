@@ -351,7 +351,9 @@ announcePeer p = do
         Nothing -> $(logErrorS) "PeerManager" "Not announcing disconnected peer"
 
 getNewPeer :: (MonadUnliftIO m, MonadManager m) => m (Maybe SockAddr)
-getNewPeer = runMaybeT $ lift loadPeers >> go
+getNewPeer =
+    reportSlow 0.2 "PeerManager" "Get New Peer" $
+    runMaybeT $ lift loadPeers >> go
   where
     go = do
         b <- asks knownPeers
