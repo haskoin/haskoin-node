@@ -197,7 +197,6 @@ withTestNode net str f =
             na = NetworkAddress
                  0
                  (sockToHostAddress (SockAddrInet 0 0))
-            sa = SockAddrInet 0 0
             cfg = NodeConfig
                   { nodeConfMaxPeers = 20
                   , nodeConfDB = db
@@ -208,7 +207,7 @@ withTestNode net str f =
                   , nodeConfEvents = pub
                   , nodeConfTimeout = 120
                   , nodeConfPeerOld = 48 * 3600
-                  , nodeConfConnect = dummyPeerConnect net ad sa
+                  , nodeConfConnect = dummyPeerConnect net ad
                   }
         withNode cfg $ \(Node mgr ch) ->
             withSubscription pub $ \sub ->

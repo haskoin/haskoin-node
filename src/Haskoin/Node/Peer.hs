@@ -89,18 +89,18 @@ data PeerException
 
 instance Show PeerException where
     show (PeerMisbehaving s) = "Peer misbehaving: " <> s
-    show DuplicateVersion = "Duplicate version"
-    show DecodeHeaderError = "Error decoding header"
+    show DuplicateVersion    = "Duplicate version"
+    show DecodeHeaderError   = "Error decoding header"
     show CannotDecodePayload = "Cannot decode payload"
-    show PeerIsMyself = "Peer is myself"
+    show PeerIsMyself        = "Peer is myself"
     show (PayloadTooLarge s) = "Payload too large: " <> show s
-    show PeerAddressInvalid = "Peer address invalid"
-    show PeerSentBadHeaders = "Peer sent bad headers"
-    show NotNetworkPeer = "Not network peer"
-    show PeerNoSegWit = "Segwit not supported by peer"
-    show PeerTimeout = "Peer timed out"
-    show UnknownPeer = "Unknown peer"
-    show PeerTooOld = "Peer too old"
+    show PeerAddressInvalid  = "Peer address invalid"
+    show PeerSentBadHeaders  = "Peer sent bad headers"
+    show NotNetworkPeer      = "Not network peer"
+    show PeerNoSegWit        = "Segwit not supported by peer"
+    show PeerTimeout         = "Peer timed out"
+    show UnknownPeer         = "Unknown peer"
+    show PeerTooOld          = "Peer too old"
 
 instance Exception PeerException
 

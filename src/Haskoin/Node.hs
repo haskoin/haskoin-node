@@ -53,7 +53,7 @@ data NodeConfig = NodeConfig
       -- ^ timeout in seconds
     , nodeConfPeerOld  :: !Int
       -- ^ peer disconnect after seconds
-    , nodeConfConnect  :: !WithConnection
+    , nodeConfConnect  :: !(SockAddr -> WithConnection)
     }
 
 data Node = Node { nodeManager :: !PeerManager

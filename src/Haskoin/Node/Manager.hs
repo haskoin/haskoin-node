@@ -98,7 +98,7 @@ data PeerManagerConfig =
         , peerManagerEvents   :: !(Publisher PeerEvent)
         , peerManagerTimeout  :: !Int
         , peerManagerTooOld   :: !Int
-        , peerManagerConnect  :: !WithConnection
+        , peerManagerConnect  :: !(SockAddr -> WithConnection)
         , peerManagerPub      :: !(Publisher (Peer, Message))
         }
 
@@ -445,7 +445,7 @@ connectPeer sa = do
             let pc = PeerConfig { peerConfPub = pub
                                 , peerConfNetwork = net
                                 , peerConfText = text
-                                , peerConfConnect = conn
+                                , peerConfConnect = conn sa
                                 }
                 p = wrapPeer pc mailbox
             a <- withRunInIO $ \io ->
