@@ -5,6 +5,17 @@
 
 packages:
 - completed:
+    size: 9640
+    url: https://github.com/jprupp/nqe/archive/acbed8c6f39055b33e9c24de3ce634cfc2d8de88.tar.gz
+    name: nqe
+    version: 0.6.3
+    sha256: 451437cf8adf4cf3f9664d31dc7991c1a3f1fdb980c64bb136a8ba3c4779bf36
+    pantry-tree:
+      size: 871
+      sha256: 46623027841003c77af78310d45ad1bd53f46f21b8563c720eb4fc5a26e0c77e
+  original:
+    url: https://github.com/jprupp/nqe/archive/acbed8c6f39055b33e9c24de3ce634cfc2d8de88.tar.gz
+- completed:
     size: 266117
     url: https://github.com/haskoin/haskoin-core/archive/d313ac58b2f22fa7570a5e1234244b7249a48382.tar.gz
     name: haskoin-core
