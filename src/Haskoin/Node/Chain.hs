@@ -303,7 +303,7 @@ chainMessage (ChainPeerConnected p) = do
     syncNewPeer
 
 chainMessage (ChainPeerDisconnected p) = do
-    $(logDebugS) "Chain" $ "Peer disconnected" <> peerText p
+    $(logDebugS) "Chain" $ "Peer disconnected: " <> peerText p
     finishPeer p
     syncNewPeer
 
