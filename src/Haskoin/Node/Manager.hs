@@ -21,6 +21,7 @@ module Haskoin.Node.Manager
     , managerPong
     , managerAddrs
     , managerVerAck
+    , managerTickle
     , getPeers
     , getOnlinePeer
     , buildVersion
@@ -94,7 +95,7 @@ data PeerManagerConfig =
         , peerManagerNetwork  :: !Network
         , peerManagerEvents   :: !(Publisher PeerEvent)
         , peerManagerTimeout  :: !NominalDiffTime
-        , peerManagerMaxLife   :: !NominalDiffTime
+        , peerManagerMaxLife  :: !NominalDiffTime
         , peerManagerConnect  :: !(SockAddr -> WithConnection)
         , peerManagerPub      :: !(Publisher (Peer, Message))
         }
@@ -119,6 +120,7 @@ data ManagerMessage
     | PeerPing !Peer !Word64
     | PeerPong !Peer !Word64
     | PeerAddrs !Peer ![NetworkAddress]
+    | PeerTickle !Peer
 
 -- | Data structure representing an online peer.
 data OnlinePeer =
@@ -133,6 +135,7 @@ data OnlinePeer =
         , onlinePeerPing        :: !(Maybe (UTCTime, Word64))
         , onlinePeerPings       :: ![NominalDiffTime]
         , onlinePeerConnectTime :: !UTCTime
+        , onlinePeerTickled     :: !UTCTime
         }
 
 instance Eq OnlinePeer where
@@ -315,18 +318,31 @@ managerMessage (PeerDied a e) =
 managerMessage (CheckPeer p) =
     checkPeer p
 
+managerMessage (PeerTickle p) = do
+    $(logDebugS) "PeerManager" $
+        "Tickle peer: " <> peerText p
+    b <- asks onlinePeers
+    now <- liftIO getCurrentTime
+    atomically $
+        modifyPeer b p $ \o ->
+        o { onlinePeerTickled = now }
+
 checkPeer :: (MonadManager m, MonadLoggerIO m) => Peer -> m ()
 checkPeer p = do
     PeerManagerConfig
-        {peerManagerMaxLife = max_age} <- asks myConfig
+        { peerManagerMaxLife = max_age
+        , peerManagerTimeout = to
+        } <- asks myConfig
     b <- asks onlinePeers
     now <- liftIO getCurrentTime
     atomically (findPeer b p) >>= \case
         Nothing -> return ()
         Just o -> do
             check_conn max_age now o
-            check_ping o
+            when (check_tickle now to o) (check_ping o)
   where
+    check_tickle now to o =
+        now `diffUTCTime` onlinePeerTickled o > to
     check_conn max_age now o = do
         let t = onlinePeerConnectTime o
         when (now `diffUTCTime` t > max_age) $
@@ -583,6 +599,7 @@ newOnlinePeer box addr nonce p peer_async connect_time = do
              , onlinePeerPings = []
              , onlinePeerPing = Nothing
              , onlinePeerConnectTime = connect_time
+             , onlinePeerTickled = connect_time
              }
     insertPeer box op
     return op
@@ -669,6 +686,11 @@ managerAddrs :: MonadIO m
              => Peer -> [NetworkAddress] -> PeerManager -> m ()
 managerAddrs p addrs mgr =
     PeerAddrs p addrs `send` myMailbox mgr
+
+managerTickle :: MonadIO m
+              => Peer -> PeerManager -> m ()
+managerTickle p mgr =
+    PeerTickle p `send` myMailbox mgr
 
 toSockAddr :: MonadUnliftIO m => HostPort -> m [SockAddr]
 toSockAddr (host, port) = go `catch` e

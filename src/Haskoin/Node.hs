@@ -136,6 +136,7 @@ peerForwarder ch mgr pub inbox =
             MHeaders (Headers hs) ->
                 chainHeaders p (map fst hs) ch
             _ -> return ()
+        managerTickle p mgr
         publish (PeerMessage p msg) pub
 
 -- | Launch node process in the foreground.
