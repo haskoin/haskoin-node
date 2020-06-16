@@ -497,8 +497,9 @@ setLastReceived :: MonadChain m => m ()
 setLastReceived = do
     now <- liftIO getCurrentTime
     st <- asks chainState
+    let f p = p { chainTimestamp = now }
     atomically . modifyTVar st $ \s ->
-        s {chainSyncing = (\p -> p {chainTimestamp = now}) <$> chainSyncing s}
+        s { chainSyncing = f <$> chainSyncing s }
 
 -- | Add a new peer to the queue of peers to sync against.
 addPeer :: MonadChain m => Peer -> m ()
