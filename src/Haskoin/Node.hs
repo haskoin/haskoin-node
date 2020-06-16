@@ -178,6 +178,7 @@ withNode cfg action =
             , peerManagerNetwork = nodeConfNet cfg
             , peerManagerEvents = mgr_pub
             , peerManagerMaxLife = nodeConfPeerMaxLife cfg
+            , peerManagerTimeout = nodeConfTimeout cfg
             , peerManagerConnect = nodeConfConnect cfg
             , peerManagerPub = peer_pub
             }

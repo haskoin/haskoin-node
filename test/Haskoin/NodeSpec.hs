@@ -206,7 +206,7 @@ withTestNode net str f =
                   , nodeConfNet = net
                   , nodeConfEvents = pub
                   , nodeConfTimeout = 120
-                  , nodeConfPeerOld = 48 * 3600
+                  , nodeConfPeerMaxLife = 48 * 3600
                   , nodeConfConnect = dummyPeerConnect net ad
                   }
         withNode cfg $ \(Node mgr ch) ->
