@@ -309,6 +309,8 @@ syncPeer p = do
         setBusy p >>= \case
             False -> return Nothing
             True -> do
+                $(logDebugS) "Chain" $
+                    "Locked peer: " <> peerText p
                 h <- withBlockHeaders getBestBlockHeader
                 Just <$> syncHeaders t h p
     syncing_me t m = do
@@ -509,26 +511,27 @@ addPeer p = do
 
 -- | Get syncing peer if there is one.
 getSyncingPeer :: MonadChain m => m (Maybe Peer)
-getSyncingPeer = fmap chainSyncPeer . chainSyncing <$> (readTVarIO =<< asks chainState)
+getSyncingPeer =
+    fmap chainSyncPeer . chainSyncing <$> (readTVarIO =<< asks chainState)
 
 -- | Remove a peer from the queue of peers to sync and unset the syncing peer if
 -- it is set to the provided value.
 finishPeer :: MonadChain m => Peer -> m ()
 finishPeer p =
-    asks chainState >>= \st -> do
-        remove_peer st
-        setFree p
+    asks chainState >>=
+    remove_peer >>= \x -> when x $ do
+    $(logDebugS) "Chain" $ "Free peer: " <> peerText p
+    setFree p
   where
     remove_peer st =
-        atomically $
-            modifyTVar st $ \s ->
-                s { newPeers = delete p (newPeers s)
-                  , chainSyncing =
-                        case chainSyncing s of
-                            Just ChainSync { chainSyncPeer = p' }
-                                | p == p' -> Nothing
-                            _ -> chainSyncing s
-                  }
+        atomically $ readTVar st >>= \s -> do
+            let is_me = maybe False ((== p) . chainSyncPeer) (chainSyncing s)
+                new_sync = if is_me then Nothing else chainSyncing s
+                new_peers = delete p (newPeers s)
+            writeTVar st $
+                s { newPeers = new_peers
+                  , chainSyncing = new_sync }
+            return is_me
 
 -- | Return syncing peer data.
 chainSyncingPeer :: MonadChain m => m (Maybe ChainSync)
