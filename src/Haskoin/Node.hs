@@ -36,25 +36,25 @@ import           UnliftIO                (MonadUnliftIO, SomeException, catch,
 
 -- | General node configuration.
 data NodeConfig = NodeConfig
-    { nodeConfMaxPeers :: !Int
+    { nodeConfMaxPeers    :: !Int
       -- ^ maximum number of connected peers allowed
-    , nodeConfDB       :: !DB
+    , nodeConfDB          :: !DB
       -- ^ database handler
-    , nodeConfPeers    :: ![HostPort]
+    , nodeConfPeers       :: ![HostPort]
       -- ^ static list of peers to connect to
-    , nodeConfDiscover :: !Bool
+    , nodeConfDiscover    :: !Bool
       -- ^ activate peer discovery
-    , nodeConfNetAddr  :: !NetworkAddress
+    , nodeConfNetAddr     :: !NetworkAddress
       -- ^ network address for the local host
-    , nodeConfNet      :: !Network
+    , nodeConfNet         :: !Network
       -- ^ network constants
-    , nodeConfEvents   :: !(Publisher NodeEvent)
+    , nodeConfEvents      :: !(Publisher NodeEvent)
       -- ^ node events are sent to this publisher
-    , nodeConfTimeout  :: !NominalDiffTime
+    , nodeConfTimeout     :: !NominalDiffTime
       -- ^ timeout in seconds
-    , nodeConfPeerOld  :: !NominalDiffTime
+    , nodeConfPeerMaxLife :: !NominalDiffTime
       -- ^ peer disconnect after seconds
-    , nodeConfConnect  :: !(SockAddr -> WithConnection)
+    , nodeConfConnect     :: !(SockAddr -> WithConnection)
     }
 
 data Node = Node { nodeManager :: !PeerManager
@@ -177,8 +177,7 @@ withNode cfg action =
             , peerManagerNetAddr = nodeConfNetAddr cfg
             , peerManagerNetwork = nodeConfNet cfg
             , peerManagerEvents = mgr_pub
-            , peerManagerTimeout = nodeConfTimeout cfg
-            , peerManagerTooOld = nodeConfPeerOld cfg
+            , peerManagerMaxLife = nodeConfPeerMaxLife cfg
             , peerManagerConnect = nodeConfConnect cfg
             , peerManagerPub = peer_pub
             }

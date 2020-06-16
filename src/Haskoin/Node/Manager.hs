@@ -94,7 +94,7 @@ data PeerManagerConfig =
         , peerManagerNetwork  :: !Network
         , peerManagerEvents   :: !(Publisher PeerEvent)
         , peerManagerTimeout  :: !NominalDiffTime
-        , peerManagerTooOld   :: !NominalDiffTime
+        , peerManagerMaxLife   :: !NominalDiffTime
         , peerManagerConnect  :: !(SockAddr -> WithConnection)
         , peerManagerPub      :: !(Publisher (Peer, Message))
         }
@@ -131,7 +131,6 @@ data OnlinePeer =
         , onlinePeerMailbox     :: !Peer
         , onlinePeerNonce       :: !Word64
         , onlinePeerPing        :: !(Maybe (UTCTime, Word64))
-        , onlinePeerLastPong    :: !UTCTime
         , onlinePeerPings       :: ![NominalDiffTime]
         , onlinePeerConnectTime :: !UTCTime
         }
@@ -319,24 +318,26 @@ managerMessage (CheckPeer p) =
 checkPeer :: (MonadManager m, MonadLoggerIO m) => Peer -> m ()
 checkPeer p = do
     PeerManagerConfig
-        { peerManagerTimeout = time_out
-        , peerManagerTooOld = max_age
-        } <- asks myConfig
+        {peerManagerMaxLife = max_age} <- asks myConfig
     b <- asks onlinePeers
     now <- liftIO getCurrentTime
     atomically (findPeer b p) >>= \case
         Nothing -> return ()
-        Just OnlinePeer {onlinePeerConnectTime = t} ->
-            when (now `diffUTCTime` t > max_age) $
-                killPeer PeerTooOld p
-    atomically (lastPong b p) >>= \case
-        Nothing ->
-            sendPing p
-        Just t ->
-            when (now `diffUTCTime` t > time_out) $ do
-                $(logErrorS) "PeerManager" $
-                    "Peer " <> peerText p
-                    <> " ping time out"
+        Just o -> do
+            check_conn max_age now o
+            check_ping o
+  where
+    check_conn max_age now o = do
+        let t = onlinePeerConnectTime o
+        when (now `diffUTCTime` t > max_age) $
+            killPeer PeerTooOld p
+    check_ping o =
+        case onlinePeerPing o of
+            Nothing ->
+                sendPing p
+            Just _ -> do
+                $(logWarnS) "PeerManager" $
+                    "Peer ping timeout: " <> peerText p
                 killPeer PeerTimeout p
 
 sendPing :: (MonadManager m, MonadLoggerIO m) => Peer -> m ()
@@ -393,14 +394,12 @@ processPeerOffline a e = do
 announcePeer :: (MonadManager m, MonadLoggerIO m) => Peer -> m ()
 announcePeer p = do
     b <- asks onlinePeers
-    mgr <- ask
     atomically (findPeer b p) >>= \case
         Just OnlinePeer {onlinePeerConnected = True} -> do
             $(logInfoS) "PeerManager" $
                 "Connected to peer " <> peerText p
             managerEvent $ PeerConnected p
             logConnectedPeers
-            managerCheck p mgr
         Just OnlinePeer {onlinePeerConnected = False} ->
             return ()
         Nothing ->
@@ -484,10 +483,8 @@ withPeerLoop ::
     -> m a
 withPeerLoop _ p mgr =
     withAsync . forever $ do
-        delay <- liftIO $
-            randomRIO ( 30 * 1000 * 1000
-                      , 90 * 1000 * 1000 )
-        threadDelay delay
+        let time_out = floor $ peerManagerTimeout $ myConfig mgr
+        threadDelay (time_out * 1000000)
         managerCheck p mgr
 
 withConnectLoop :: (MonadUnliftIO m, MonadManager m)
@@ -530,11 +527,7 @@ gotPong b nonce now p = void . runMaybeT $ do
             b
             o { onlinePeerPing = Nothing
               , onlinePeerPings = take 11 $ diff : onlinePeerPings o
-              , onlinePeerLastPong = now
               }
-
-lastPong :: TVar [OnlinePeer] -> Peer -> STM (Maybe UTCTime)
-lastPong b p = fmap onlinePeerLastPong <$> findPeer b p
 
 setPeerPing :: TVar [OnlinePeer] -> Word64 -> UTCTime -> Peer -> STM ()
 setPeerPing b nonce now p =
@@ -587,7 +580,6 @@ newOnlinePeer box addr nonce p peer_async connect_time = do
              , onlinePeerPings = []
              , onlinePeerPing = Nothing
              , onlinePeerConnectTime = connect_time
-             , onlinePeerLastPong = connect_time
              }
     insertPeer box op
     return op
