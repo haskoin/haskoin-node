@@ -300,7 +300,7 @@ managerMessage (PeerPing p n) = do
     $(logDebugS) "PeerManager" $
         "Responding to ping "
         <> cs (show n)
-        <> " to: " <> peerText p
+        <> " from: " <> peerText p
     MPong (Pong n) `sendMessage` p
 
 managerMessage (ManagerBest h) =
