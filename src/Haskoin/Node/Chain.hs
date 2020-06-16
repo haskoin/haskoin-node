@@ -244,12 +244,17 @@ chainEvent e = do
 processHeaders ::
        MonadChain m => Peer -> [BlockHeader] -> m ()
 processHeaders p hs = void . runMaybeT $ do
+    $(logDebugS) "Chain" $
+        "Processing " <> cs (show (length hs))
+        <> " headers from peer: " <> peerText p
     net <- asks (chainConfNetwork . myConfig)
     now <- liftIO getCurrentTime
     pbest <- lift $ withBlockHeaders getBestBlockHeader
     lift (importHeaders net now hs) >>= \case
         Left e -> do
-            $(logErrorS) "Chain" "Could not connect headers"
+            $(logErrorS) "Chain" $
+                "Could not connect headers from peer: "
+                <> peerText p
             e `killPeer` p
         Right done -> lift $ do
             setLastReceived now
@@ -269,8 +274,13 @@ syncNewPeer =
     getSyncingPeer >>= \s ->
     when (isNothing s) $
     nextPeer >>= \case
-        Nothing -> $(logDebugS) "Chain" "No more peers to sync against"
-        Just p -> syncPeer p
+        Nothing ->
+            $(logDebugS) "Chain"
+            "No more peers to sync against"
+        Just p -> do
+            $(logDebugS) "Chain" $
+                "Syncing against peer: " <> peerText p
+            syncPeer p
 
 syncNotif :: MonadChain m => m ()
 syncNotif =
@@ -288,14 +298,13 @@ syncPeer p = do
         _ -> withBlockHeaders getBestBlockHeader
     now <- liftIO getCurrentTime
     gh <- syncHeaders now bb p
-    $(logDebugS) "Chain" "Requesting headers…"
+    $(logDebugS) "Chain" $
+        "Requesting headers from peer: " <> peerText p
     MGetHeaders gh `sendMessage` p
 
 chainMessage :: MonadChain m => ChainMessage -> m ()
 
-chainMessage (ChainHeaders p hs) = do
-    $(logDebugS) "Chain" $
-        "Processing " <> cs (show (length hs)) <> " incoming headers"
+chainMessage (ChainHeaders p hs) =
     processHeaders p hs
 
 chainMessage (ChainPeerConnected p) = do
@@ -482,17 +491,16 @@ finishPeer :: MonadChain m => Peer -> m ()
 finishPeer p =
     asks chainState >>= \st ->
         atomically . modifyTVar st $ \s ->
-            s
-                { newPeers = delete p (newPeers s)
-                , chainSyncing =
-                      case chainSyncing s of
-                          Just ChainSync { chainSyncPeer = p'
-                                         , chainTimestamp = _
-                                         , chainHighest = _
-                                         }
-                              | p == p' -> Nothing
-                          _ -> chainSyncing s
-                }
+            s { newPeers = delete p (newPeers s)
+              , chainSyncing =
+                case chainSyncing s of
+                    Just ChainSync { chainSyncPeer = p'
+                                   , chainTimestamp = _
+                                   , chainHighest = _
+                                   }
+                        | p == p' -> Nothing
+                    _ -> chainSyncing s
+              }
 
 -- | Return syncing peer data.
 chainSyncingPeer :: MonadChain m => m (Maybe ChainSync)
@@ -572,8 +580,7 @@ chainBlockMain bh ch =
         Nothing ->
             return False
         bm@(Just bn) ->
-            (== bm) <$>
-            chainGetAncestor (nodeHeight bn) bb ch
+            (== bm) <$> chainGetAncestor (nodeHeight bn) bb ch
 
 -- | Is chain in sync with network?
 chainIsSynced :: MonadIO m => Chain -> m Bool
