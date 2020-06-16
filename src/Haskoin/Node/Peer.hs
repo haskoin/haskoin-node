@@ -57,9 +57,9 @@ import           NQE                       (Inbox, Mailbox, Publisher,
 import           System.Random             (randomIO)
 import           UnliftIO                  (Exception, MonadIO, MonadUnliftIO,
                                             TVar, atomically, liftIO, link,
-                                            newTVarIO, readTVar, readTVarIO,
-                                            throwIO, timeout, withAsync,
-                                            withRunInIO, writeTVar)
+                                            readTVar, readTVarIO, throwIO,
+                                            timeout, withAsync, withRunInIO,
+                                            writeTVar)
 
 data Conduits =
     Conduits
@@ -129,10 +129,10 @@ data PeerMessage
 
 wrapPeer :: MonadIO m
          => PeerConfig
+         -> TVar Bool
          -> Mailbox PeerMessage
          -> m Peer
-wrapPeer cfg mbox = do
-    busy <- newTVarIO False
+wrapPeer cfg busy mbox =
     return Peer { peerMailbox = mbox
                 , peerPublisher = peerConfPub cfg
                 , peerText = peerConfText cfg
@@ -142,27 +142,28 @@ wrapPeer cfg mbox = do
 -- | Run peer process in current thread.
 peer :: (MonadUnliftIO m, MonadLoggerIO m)
      => PeerConfig
+     -> TVar Bool
      -> Inbox PeerMessage
      -> m ()
-peer pc inbox = do
-    p <- wrapPeer pc (inboxToMailbox inbox)
+peer cfg busy inbox = do
+    p <- wrapPeer cfg busy (inboxToMailbox inbox)
     withRunInIO $ connect . (. peer_session p)
   where
-    connect = peerConfConnect pc
-    go = forever $ receive inbox >>= dispatchMessage pc
-    net = peerConfNetwork pc
+    connect = peerConfConnect cfg
+    go = forever $ receive inbox >>= dispatchMessage cfg
+    net = peerConfNetwork cfg
     peer_session p ad =
         let ins = transPipe liftIO (inboundConduit ad)
             ons = transPipe liftIO (outboundConduit ad)
             src = runConduit $
                 ins
-                .| inPeerConduit net (peerConfText pc)
+                .| inPeerConduit net (peerConfText cfg)
                 .| mapM_C (send_msg p)
             snk = outPeerConduit net .| ons
          in withAsync src $ \as -> do
                 link as
                 runConduit (go .| snk)
-    send_msg p msg = publish (p, msg) (peerConfPub pc)
+    send_msg p msg = publish (p, msg) (peerConfPub cfg)
 
 -- | Internal function to dispatch peer messages.
 dispatchMessage :: MonadLoggerIO m

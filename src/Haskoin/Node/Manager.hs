@@ -478,9 +478,10 @@ connectPeer sa = do
                                 , peerConfText = text
                                 , peerConfConnect = conn sa
                                 }
-            p <- wrapPeer pc mailbox
+            busy <- newTVarIO False
+            p <- wrapPeer pc busy mailbox
             a <- withRunInIO $ \io ->
-                sup `addChild` io (launch pc inbox p)
+                sup `addChild` io (launch pc busy inbox p)
             MVersion ver `sendMessage` p
             b <- asks onlinePeers
             _ <- atomically $ newOnlinePeer b sa nonce p a now
@@ -489,10 +490,10 @@ connectPeer sa = do
     srv net
         | getSegWit net = 8
         | otherwise = 0
-    launch pc inbox p =
+    launch pc busy inbox p =
         ask >>= \mgr ->
         withPeerLoop sa p mgr $ \a ->
-        link a >> peer pc inbox
+        link a >> peer pc busy inbox
 
 withPeerLoop ::
        (MonadUnliftIO m, MonadLogger m)
