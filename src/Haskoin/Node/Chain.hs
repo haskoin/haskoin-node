@@ -60,12 +60,10 @@ import           Haskoin.Node.Manager      (myVersion)
 import           Haskoin.Node.Peer
 import           NQE                       (Mailbox, Publisher, newMailbox,
                                             publish, receive, send)
-import           System.Random             (randomRIO)
 import           UnliftIO                  (MonadIO, MonadUnliftIO, TVar,
                                             atomically, liftIO, link,
                                             modifyTVar, newTVarIO, readTVar,
                                             readTVarIO, withAsync, writeTVar)
-import           UnliftIO.Concurrent       (threadDelay)
 import           UnliftIO.Resource         (runResourceT)
 
 -- | Mailbox for chain header syncing process.
@@ -93,7 +91,6 @@ data ChainMessage
     = ChainHeaders !Peer ![BlockHeader]
     | ChainPeerConnected !Peer
     | ChainPeerDisconnected !Peer
-    | ChainPing
 
 -- | Events originating from chain syncing process.
 data ChainEvent
@@ -214,10 +211,10 @@ withChain cfg action = do
         ch = Chain { chainReader = rd
                    , chainMailbox = mailbox
                    }
-    withAsync (main_loop ch rd inbox) $ \a ->
+    withAsync (main_loop rd inbox) $ \a ->
         link a >> action ch
   where
-    main_loop ch rd inbox = withSyncLoop ch $
+    main_loop rd inbox =
         run inbox `runReaderT` rd
     run inbox = do
         initChainDB
@@ -316,30 +313,6 @@ chainMessage (ChainPeerDisconnected p) = do
     $(logDebugS) "Chain" $ "Peer disconnected: " <> peerText p
     finishPeer p
     syncNewPeer
-
-chainMessage ChainPing = do
-    to <- asks (chainConfTimeout . myConfig)
-    now <- liftIO getCurrentTime
-    chainSyncingPeer >>= \case
-        Just ChainSync {chainSyncPeer = p, chainTimestamp = t}
-            | now `diffUTCTime` t > to -> do
-                $(logErrorS) "Chain" $
-                    "Syncing peer timed out: " <> peerText p
-                PeerTimeout `killPeer` p
-        _ -> return ()
-
-withSyncLoop :: (MonadUnliftIO m, MonadLoggerIO m)
-             => Chain -> m a -> m a
-withSyncLoop ch f =
-    withAsync go $ \a ->
-    link a >> f
-  where
-    go = forever $ do
-        delay <- liftIO $
-            randomRIO (  2 * 1000 * 1000
-                      , 20 * 1000 * 1000 )
-        threadDelay delay
-        ChainPing `send` chainMailbox ch
 
 -- | Version of the database.
 dataVersion :: Word32
