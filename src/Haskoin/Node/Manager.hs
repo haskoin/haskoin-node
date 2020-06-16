@@ -345,13 +345,16 @@ sendPing p = do
     b <- asks onlinePeers
     atomically (findPeer b p) >>= \case
         Nothing ->
-            $(logDebugS) "PeerManager" $
+            $(logWarnS) "PeerManager" $
             "Will not ping unknown peer: " <> peerText p
         Just o
             | onlinePeerConnected o -> do
                 n <- liftIO randomIO
                 now <- liftIO getCurrentTime
                 atomically (setPeerPing b n now p)
+                $(logDebugS)" PeerManager" $
+                    "Sending ping " <> cs (show n)
+                    <> " to: " <> peerText p
                 MPing (Ping n) `sendMessage` p
             | otherwise -> return ()
 
