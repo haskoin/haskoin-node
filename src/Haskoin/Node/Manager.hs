@@ -319,8 +319,6 @@ managerMessage (CheckPeer p) =
     checkPeer p
 
 managerMessage (PeerTickle p) = do
-    $(logDebugS) "PeerManager" $
-        "Tickle peer: " <> peerText p
     b <- asks onlinePeers
     now <- liftIO getCurrentTime
     atomically $
@@ -328,18 +326,21 @@ managerMessage (PeerTickle p) = do
         o { onlinePeerTickled = now }
 
 checkPeer :: (MonadManager m, MonadLoggerIO m) => Peer -> m ()
-checkPeer p = do
-    PeerManagerConfig
-        { peerManagerMaxLife = max_age
-        , peerManagerTimeout = to
-        } <- asks myConfig
-    b <- asks onlinePeers
-    now <- liftIO getCurrentTime
-    atomically (findPeer b p) >>= \case
-        Nothing -> return ()
-        Just o -> do
-            check_conn max_age now o
-            when (check_tickle now to o) (check_ping o)
+checkPeer p =
+    getBusy p >>= \case
+        True -> return ()
+        False -> do
+            PeerManagerConfig
+                { peerManagerMaxLife = max_age
+                , peerManagerTimeout = to
+                } <- asks myConfig
+            b <- asks onlinePeers
+            now <- liftIO getCurrentTime
+            atomically (findPeer b p) >>= \case
+                Nothing -> return ()
+                Just o -> do
+                    check_conn max_age now o
+                    when (check_tickle now to o) (check_ping o)
   where
     check_tickle now to o =
         now `diffUTCTime` onlinePeerTickled o > to
@@ -477,7 +478,7 @@ connectPeer sa = do
                                 , peerConfText = text
                                 , peerConfConnect = conn sa
                                 }
-                p = wrapPeer pc mailbox
+            p <- wrapPeer pc mailbox
             a <- withRunInIO $ \io ->
                 sup `addChild` io (launch pc inbox p)
             MVersion ver `sendMessage` p

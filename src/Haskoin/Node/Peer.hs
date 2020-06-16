@@ -23,6 +23,9 @@ module Haskoin.Node.Peer
     , getTxs
     , getData
     , pingPeer
+    , getBusy
+    , setBusy
+    , setFree
     ) where
 
 import           Conduit                   (ConduitT, Void, awaitForever, foldC,
@@ -53,8 +56,10 @@ import           NQE                       (Inbox, Mailbox, Publisher,
                                             withSubscription)
 import           System.Random             (randomIO)
 import           UnliftIO                  (Exception, MonadIO, MonadUnliftIO,
-                                            liftIO, link, throwIO, timeout,
-                                            withAsync, withRunInIO)
+                                            TVar, atomically, liftIO, link,
+                                            newTVarIO, readTVar, readTVarIO,
+                                            throwIO, timeout, withAsync,
+                                            withRunInIO, writeTVar)
 
 data Conduits =
     Conduits
@@ -108,6 +113,7 @@ instance Exception PeerException
 data Peer = Peer { peerMailbox   :: !(Mailbox PeerMessage)
                  , peerPublisher :: !(Publisher (Peer, Message))
                  , peerText      :: !Text
+                 , peerBusy      :: !(TVar Bool)
                  }
 
 instance Eq Peer where
@@ -121,38 +127,42 @@ data PeerMessage
     = KillPeer !PeerException
     | SendMessage !Message
 
-wrapPeer :: PeerConfig
+wrapPeer :: MonadIO m
+         => PeerConfig
          -> Mailbox PeerMessage
-         -> Peer
-wrapPeer cfg mbox = Peer { peerMailbox = mbox
-                         , peerPublisher = peerConfPub cfg
-                         , peerText = peerConfText cfg
-                         }
+         -> m Peer
+wrapPeer cfg mbox = do
+    busy <- newTVarIO False
+    return Peer { peerMailbox = mbox
+                , peerPublisher = peerConfPub cfg
+                , peerText = peerConfText cfg
+                , peerBusy = busy
+                }
 
 -- | Run peer process in current thread.
 peer :: (MonadUnliftIO m, MonadLoggerIO m)
      => PeerConfig
      -> Inbox PeerMessage
      -> m ()
-peer pc inbox =
-    withRunInIO $ connect . (. peer_session)
+peer pc inbox = do
+    p <- wrapPeer pc (inboxToMailbox inbox)
+    withRunInIO $ connect . (. peer_session p)
   where
     connect = peerConfConnect pc
     go = forever $ receive inbox >>= dispatchMessage pc
     net = peerConfNetwork pc
-    p = Peer (inboxToMailbox inbox) (peerConfPub pc) (peerConfText pc)
-    peer_session ad =
+    peer_session p ad =
         let ins = transPipe liftIO (inboundConduit ad)
             ons = transPipe liftIO (outboundConduit ad)
             src = runConduit $
                 ins
                 .| inPeerConduit net (peerConfText pc)
-                .| mapM_C send_msg
+                .| mapM_C (send_msg p)
             snk = outPeerConduit net .| ons
          in withAsync src $ \as -> do
                 link as
                 runConduit (go .| snk)
-    send_msg msg = publish (p, msg) (peerConfPub pc)
+    send_msg p msg = publish (p, msg) (peerConfPub pc)
 
 -- | Internal function to dispatch peer messages.
 dispatchMessage :: MonadLoggerIO m
@@ -199,6 +209,20 @@ killPeer e p = KillPeer e `send` peerMailbox p
 -- | Send a network message to peer.
 sendMessage :: MonadIO m => Message -> Peer -> m ()
 sendMessage msg p = SendMessage msg `send` peerMailbox p
+
+getBusy :: MonadIO m => Peer -> m Bool
+getBusy p = readTVarIO (peerBusy p)
+
+setBusy :: MonadIO m => Peer -> m Bool
+setBusy p =
+    atomically $
+        readTVar (peerBusy p) >>= \case
+            True  -> return False
+            False -> writeTVar (peerBusy p) True >>
+                     return True
+
+setFree :: MonadIO m => Peer -> m ()
+setFree p = atomically $ writeTVar (peerBusy p) False
 
 -- | Request full blocks from peer. Will return 'Nothing' if the list of blocks
 -- returned by the peer is incomplete, comes out of order, or a timeout is

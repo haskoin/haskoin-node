@@ -25,7 +25,7 @@ module Haskoin.Node.Chain
     , chainHeaders
     ) where
 
-import           Control.Monad             (forever, guard, void, when)
+import           Control.Monad             (forM_, forever, guard, void, when)
 import           Control.Monad.Except      (runExceptT, throwError)
 import           Control.Monad.Logger      (MonadLoggerIO, logDebugS, logErrorS,
                                             logInfoS)
@@ -37,7 +37,7 @@ import qualified Data.ByteString           as B
 import           Data.Default              (def)
 import           Data.Function             (on)
 import           Data.List                 (delete, nub)
-import           Data.Maybe                (isJust, isNothing, listToMaybe)
+import           Data.Maybe                (isJust, isNothing)
 import           Data.Serialize            (Serialize, get, getWord8, put,
                                             putWord8)
 import           Data.String.Conversions   (cs)
@@ -60,10 +60,12 @@ import           Haskoin.Node.Manager      (myVersion)
 import           Haskoin.Node.Peer
 import           NQE                       (Mailbox, Publisher, newMailbox,
                                             publish, receive, send)
+import           System.Random             (randomRIO)
 import           UnliftIO                  (MonadIO, MonadUnliftIO, TVar,
                                             atomically, liftIO, link,
                                             modifyTVar, newTVarIO, readTVar,
                                             readTVarIO, withAsync, writeTVar)
+import           UnliftIO.Concurrent       (threadDelay)
 import           UnliftIO.Resource         (runResourceT)
 
 -- | Mailbox for chain header syncing process.
@@ -91,6 +93,7 @@ data ChainMessage
     = ChainHeaders !Peer ![BlockHeader]
     | ChainPeerConnected !Peer
     | ChainPeerDisconnected !Peer
+    | ChainPing
 
 -- | Events originating from chain syncing process.
 data ChainEvent
@@ -169,7 +172,9 @@ instance (Monad m, MonadIO m, MonadReader DB m) =>
          BlockHeaders m where
     addBlockHeader bn = do
         db <- ask
-        insert db (BlockHeaderKey (headerHash (nodeHeader bn))) bn
+        insert db (BlockHeaderKey h) bn
+      where
+        h = headerHash (nodeHeader bn)
     getBlockHeader bh = do
         db <- ask
         retrieve db def (BlockHeaderKey bh)
@@ -185,7 +190,8 @@ instance (Monad m, MonadIO m, MonadReader DB m) =>
         db <- ask
         writeBatch db (map f bns)
       where
-        f bn = insertOp (BlockHeaderKey (headerHash (nodeHeader bn))) bn
+        h bn = headerHash (nodeHeader bn)
+        f bn = insertOp (BlockHeaderKey (h bn)) bn
 
 withBlockHeaders :: MonadChain m => ReaderT DB m a -> m a
 withBlockHeaders f = do
@@ -211,10 +217,10 @@ withChain cfg action = do
         ch = Chain { chainReader = rd
                    , chainMailbox = mailbox
                    }
-    withAsync (main_loop rd inbox) $ \a ->
+    withAsync (main_loop ch rd inbox) $ \a ->
         link a >> action ch
   where
-    main_loop rd inbox =
+    main_loop ch rd inbox = withSyncLoop ch $
         run inbox `runReaderT` rd
     run inbox = do
         initChainDB
@@ -238,8 +244,7 @@ chainEvent e = do
             <> cs (show (nodeHeight b))
     publish e pub
 
-processHeaders ::
-       MonadChain m => Peer -> [BlockHeader] -> m ()
+processHeaders :: MonadChain m => Peer -> [BlockHeader] -> m ()
 processHeaders p hs = void . runMaybeT $ do
     $(logDebugS) "Chain" $
         "Processing " <> cs (show (length hs))
@@ -254,7 +259,7 @@ processHeaders p hs = void . runMaybeT $ do
                 <> peerText p
             e `killPeer` p
         Right done -> lift $ do
-            setLastReceived now
+            setLastReceived
             best <- withBlockHeaders getBestBlockHeader
             when (nodeHeader pbest /= nodeHeader best) $
                 chainEvent (ChainBestBlock best)
@@ -273,7 +278,7 @@ syncNewPeer =
     nextPeer >>= \case
         Nothing ->
             $(logDebugS) "Chain"
-            "No more peers to sync against"
+                "No more peers to sync against"
         Just p -> do
             $(logDebugS) "Chain" $
                 "Syncing against peer: " <> peerText p
@@ -287,17 +292,30 @@ syncNotif =
 
 syncPeer :: MonadChain m => Peer -> m ()
 syncPeer p = do
-    bb <- chainSyncingPeer >>= \case
+    t <- liftIO getCurrentTime
+    m <- chainSyncingPeer >>= \case
         Just ChainSync { chainSyncPeer = s
-                       , chainHighest = Just g
+                       , chainHighest = m
                        }
-            | p == s -> return g
-        _ -> withBlockHeaders getBestBlockHeader
-    now <- liftIO getCurrentTime
-    gh <- syncHeaders now bb p
-    $(logDebugS) "Chain" $
-        "Requesting headers from peer: " <> peerText p
-    MGetHeaders gh `sendMessage` p
+            | p == s -> syncing_me t m
+            | otherwise -> return Nothing
+        Nothing -> syncing_new t
+    forM_ m $ \g -> do
+        $(logDebugS) "Chain" $
+            "Requesting headers from peer: " <> peerText p
+        MGetHeaders g `sendMessage` p
+  where
+    syncing_new t =
+        setBusy p >>= \case
+            False -> return Nothing
+            True -> do
+                h <- withBlockHeaders getBestBlockHeader
+                Just <$> syncHeaders t h p
+    syncing_me t m = do
+        h <- case m of
+                 Nothing -> withBlockHeaders getBestBlockHeader
+                 Just h  -> return h
+        Just <$> syncHeaders t h p
 
 chainMessage :: MonadChain m => ChainMessage -> m ()
 
@@ -313,6 +331,30 @@ chainMessage (ChainPeerDisconnected p) = do
     $(logDebugS) "Chain" $ "Peer disconnected: " <> peerText p
     finishPeer p
     syncNewPeer
+
+chainMessage ChainPing = do
+    to <- asks (chainConfTimeout . myConfig)
+    now <- liftIO getCurrentTime
+    chainSyncingPeer >>= \case
+        Just ChainSync {chainSyncPeer = p, chainTimestamp = t}
+            | now `diffUTCTime` t > to -> do
+                $(logErrorS) "Chain" $
+                    "Syncing peer timed out: " <> peerText p
+                PeerTimeout `killPeer` p
+        _ -> return ()
+
+withSyncLoop :: (MonadUnliftIO m, MonadLoggerIO m)
+             => Chain -> m a -> m a
+withSyncLoop ch f =
+    withAsync go $ \a ->
+    link a >> f
+  where
+    go = forever $ do
+        delay <- liftIO $
+            randomRIO (  2 * 1000 * 1000
+                      , 20 * 1000 * 1000 )
+        threadDelay delay
+        ChainPing `send` chainMailbox ch
 
 -- | Version of the database.
 dataVersion :: Word32
@@ -410,7 +452,14 @@ notifySynced =
 
 -- | Get next peer to sync against from the queue.
 nextPeer :: MonadChain m => m (Maybe Peer)
-nextPeer = listToMaybe . newPeers <$> (asks chainState >>= readTVarIO)
+nextPeer =
+    go =<< newPeers <$> (readTVarIO =<< asks chainState)
+  where
+    go [] = return Nothing
+    go (p:ps) =
+        getBusy p >>= \case
+            True  -> go ps
+            False -> return (Just p)
 
 -- | Set a syncing peer and generate a 'GetHeaders' data structure with a block
 -- locator to send to that peer for syncing.
@@ -422,28 +471,31 @@ syncHeaders ::
     -> m GetHeaders
 syncHeaders now bb p = do
     st <- asks chainState
-    atomically . modifyTVar st $ \s ->
-        s { chainSyncing =
-            Just
-            ChainSync
-            { chainSyncPeer = p
-            , chainTimestamp = now
-            , chainHighest = Nothing
-            }
-          , newPeers = delete p (newPeers s)
-          }
+    atomically $
+        modifyTVar st $ \s ->
+            s { chainSyncing =
+                    Just
+                        ChainSync
+                            { chainSyncPeer = p
+                            , chainTimestamp = now
+                            , chainHighest = Nothing
+                            }
+              , newPeers = delete p (newPeers s)
+              }
     loc <- withBlockHeaders $ blockLocator bb
     return
         GetHeaders
-        { getHeadersVersion = myVersion
-        , getHeadersBL = loc
-        , getHeadersHashStop =
-          "0000000000000000000000000000000000000000000000000000000000000000"
-        }
+            { getHeadersVersion = myVersion
+            , getHeadersBL = loc
+            , getHeadersHashStop = z
+            }
+  where
+    z = "0000000000000000000000000000000000000000000000000000000000000000"
 
 -- | Set the time of last received data to now if a syncing peer is active.
-setLastReceived :: MonadChain m => UTCTime -> m ()
-setLastReceived now = do
+setLastReceived :: MonadChain m => m ()
+setLastReceived = do
+    now <- liftIO getCurrentTime
     st <- asks chainState
     atomically . modifyTVar st $ \s ->
         s {chainSyncing = (\p -> p {chainTimestamp = now}) <$> chainSyncing s}
@@ -462,18 +514,20 @@ getSyncingPeer = fmap chainSyncPeer . chainSyncing <$> (readTVarIO =<< asks chai
 -- it is set to the provided value.
 finishPeer :: MonadChain m => Peer -> m ()
 finishPeer p =
-    asks chainState >>= \st ->
-        atomically . modifyTVar st $ \s ->
-            s { newPeers = delete p (newPeers s)
-              , chainSyncing =
-                case chainSyncing s of
-                    Just ChainSync { chainSyncPeer = p'
-                                   , chainTimestamp = _
-                                   , chainHighest = _
-                                   }
-                        | p == p' -> Nothing
-                    _ -> chainSyncing s
-              }
+    asks chainState >>= \st -> do
+        remove_peer st
+        setFree p
+  where
+    remove_peer st =
+        atomically $
+            modifyTVar st $ \s ->
+                s { newPeers = delete p (newPeers s)
+                  , chainSyncing =
+                        case chainSyncing s of
+                            Just ChainSync { chainSyncPeer = p' }
+                                | p == p' -> Nothing
+                            _ -> chainSyncing s
+                  }
 
 -- | Return syncing peer data.
 chainSyncingPeer :: MonadChain m => m (Maybe ChainSync)
