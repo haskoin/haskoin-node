@@ -18,6 +18,7 @@ import           Control.Monad.Logger    (MonadLoggerIO)
 import           Data.Conduit.Network    (appSink, appSource, clientSettings,
                                           runTCPClient)
 import           Data.String.Conversions (cs)
+import           Data.Time.Clock         (NominalDiffTime)
 import           Database.RocksDB        (DB)
 import           Haskoin                 (Addr (..), BlockNode (..),
                                           Headers (..), Message (..), Network,
@@ -49,9 +50,9 @@ data NodeConfig = NodeConfig
       -- ^ network constants
     , nodeConfEvents   :: !(Publisher NodeEvent)
       -- ^ node events are sent to this publisher
-    , nodeConfTimeout  :: !Int
+    , nodeConfTimeout  :: !NominalDiffTime
       -- ^ timeout in seconds
-    , nodeConfPeerOld  :: !Int
+    , nodeConfPeerOld  :: !NominalDiffTime
       -- ^ peer disconnect after seconds
     , nodeConfConnect  :: !(SockAddr -> WithConnection)
     }

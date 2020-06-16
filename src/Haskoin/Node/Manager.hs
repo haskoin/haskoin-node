@@ -46,8 +46,8 @@ import           Data.Set                  (Set)
 import qualified Data.Set                  as Set
 import           Data.String.Conversions   (cs)
 import           Data.Time.Clock           (NominalDiffTime, UTCTime,
-                                            diffUTCTime)
-import           Data.Time.Clock.POSIX     (getCurrentTime, getPOSIXTime)
+                                            diffUTCTime, getCurrentTime)
+import           Data.Time.Clock.POSIX     (utcTimeToPOSIXSeconds)
 import           Data.Word                 (Word32, Word64)
 import           Haskoin                   (BlockHeight, Message (..),
                                             Network (..), NetworkAddress (..),
@@ -78,10 +78,7 @@ type HostPort = (Host, Port)
 type Host = String
 type Port = Int
 
-type MonadManager m =
-    ( MonadLoggerIO m
-    , MonadReader PeerManager m
-    )
+type MonadManager m = (MonadIO m, MonadReader PeerManager m)
 
 data PeerEvent
     = PeerConnected !Peer
@@ -96,20 +93,21 @@ data PeerManagerConfig =
         , peerManagerNetAddr  :: !NetworkAddress
         , peerManagerNetwork  :: !Network
         , peerManagerEvents   :: !(Publisher PeerEvent)
-        , peerManagerTimeout  :: !Int
-        , peerManagerTooOld   :: !Int
+        , peerManagerTimeout  :: !NominalDiffTime
+        , peerManagerTooOld   :: !NominalDiffTime
         , peerManagerConnect  :: !(SockAddr -> WithConnection)
         , peerManagerPub      :: !(Publisher (Peer, Message))
         }
 
-data PeerManager = PeerManager
-    { myConfig     :: !PeerManagerConfig
-    , mySupervisor :: !Supervisor
-    , myMailbox    :: !(Mailbox ManagerMessage)
-    , myBestBlock  :: !(TVar BlockHeight)
-    , knownPeers   :: !(TVar (Set SockAddr))
-    , onlinePeers  :: !(TVar [OnlinePeer])
-    }
+data PeerManager =
+    PeerManager
+        { myConfig     :: !PeerManagerConfig
+        , mySupervisor :: !Supervisor
+        , myMailbox    :: !(Mailbox ManagerMessage)
+        , myBestBlock  :: !(TVar BlockHeight)
+        , knownPeers   :: !(TVar (Set SockAddr))
+        , onlinePeers  :: !(TVar [OnlinePeer])
+        }
 
 data ManagerMessage
     = Connect !SockAddr
@@ -123,19 +121,20 @@ data ManagerMessage
     | PeerAddrs !Peer ![NetworkAddress]
 
 -- | Data structure representing an online peer.
-data OnlinePeer = OnlinePeer
-    { onlinePeerAddress     :: !SockAddr
-    , onlinePeerVerAck      :: !Bool
-    , onlinePeerConnected   :: !Bool
-    , onlinePeerVersion     :: !(Maybe Version)
-    , onlinePeerAsync       :: !(Async ())
-    , onlinePeerMailbox     :: !Peer
-    , onlinePeerNonce       :: !Word64
-    , onlinePeerPing        :: !(Maybe (UTCTime, Word64))
-    , onlinePeerLastMessage :: !Word64
-    , onlinePeerPings       :: ![NominalDiffTime]
-    , onlinePeerConnectTime :: !Word64
-    }
+data OnlinePeer =
+    OnlinePeer
+        { onlinePeerAddress     :: !SockAddr
+        , onlinePeerVerAck      :: !Bool
+        , onlinePeerConnected   :: !Bool
+        , onlinePeerVersion     :: !(Maybe Version)
+        , onlinePeerAsync       :: !(Async ())
+        , onlinePeerMailbox     :: !Peer
+        , onlinePeerNonce       :: !Word64
+        , onlinePeerPing        :: !(Maybe (UTCTime, Word64))
+        , onlinePeerLastPong    :: !UTCTime
+        , onlinePeerPings       :: ![NominalDiffTime]
+        , onlinePeerConnectTime :: !UTCTime
+        }
 
 instance Eq OnlinePeer where
     (==) = (==) `on` f
@@ -173,7 +172,9 @@ withPeerManager cfg action = do
         withConnectLoop $
         link a >> ReaderT action
 
-peerManager :: (MonadUnliftIO m, MonadManager m)
+peerManager :: ( MonadUnliftIO m
+               , MonadManager m
+               , MonadLoggerIO m )
             => Inbox ManagerMessage
             -> m ()
 peerManager inb = do
@@ -219,7 +220,7 @@ loadNetSeeds =
             ss <- concat <$> mapM toSockAddr (networkSeeds net)
             mapM_ newPeer ss
 
-logConnectedPeers :: MonadManager m => m ()
+logConnectedPeers :: (MonadManager m, MonadLoggerIO m) => m ()
 logConnectedPeers = do
     m <- asks (peerManagerMaxPeers . myConfig)
     l <- length <$> getConnectedPeers
@@ -238,7 +239,9 @@ managerEvent :: MonadManager m => PeerEvent -> m ()
 managerEvent e =
     publish e =<< asks (peerManagerEvents . myConfig)
 
-managerMessage :: (MonadUnliftIO m, MonadManager m)
+managerMessage :: ( MonadUnliftIO m
+                  , MonadManager m
+                  , MonadLoggerIO m )
                => ManagerMessage
                -> m ()
 
@@ -313,34 +316,36 @@ managerMessage (PeerDied a e) =
 managerMessage (CheckPeer p) =
     checkPeer p
 
-checkPeer :: MonadManager m => Peer -> m ()
+checkPeer :: (MonadManager m, MonadLoggerIO m) => Peer -> m ()
 checkPeer p = do
     PeerManagerConfig
-        { peerManagerTimeout = to
-        , peerManagerTooOld = old
+        { peerManagerTimeout = time_out
+        , peerManagerTooOld = max_age
         } <- asks myConfig
     b <- asks onlinePeers
+    now <- liftIO getCurrentTime
     atomically (findPeer b p) >>= \case
         Nothing -> return ()
-        Just o -> do
-            now <- round <$> liftIO getPOSIXTime
-            when (onlinePeerConnectTime o < now - fromIntegral old) $
+        Just OnlinePeer {onlinePeerConnectTime = t} ->
+            when (now `diffUTCTime` t > max_age) $
                 killPeer PeerTooOld p
-    atomically (lastMessage b p) >>= \case
-        Nothing -> sendPing p
-        Just t -> do
-            now <- round <$> liftIO getPOSIXTime
-            when (now - t > fromIntegral to) $ do
+    atomically (lastPong b p) >>= \case
+        Nothing ->
+            sendPing p
+        Just t ->
+            when (now `diffUTCTime` t > time_out) $ do
                 $(logErrorS) "PeerManager" $
                     "Peer " <> peerText p
-                    <> " did not respond to ping on time"
+                    <> " ping time out"
                 killPeer PeerTimeout p
 
-sendPing :: MonadManager m => Peer -> m ()
+sendPing :: (MonadManager m, MonadLoggerIO m) => Peer -> m ()
 sendPing p = do
     b <- asks onlinePeers
     atomically (findPeer b p) >>= \case
-        Nothing -> $(logDebugS) "PeerManager" "Will not ping unknown peer"
+        Nothing ->
+            $(logDebugS) "PeerManager" $
+            "Will not ping unknown peer: " <> peerText p
         Just o
             | onlinePeerConnected o -> do
                 n <- liftIO randomIO
@@ -349,7 +354,8 @@ sendPing p = do
                 MPing (Ping n) `sendMessage` p
             | otherwise -> return ()
 
-processPeerOffline :: MonadManager m => Child -> Maybe SomeException -> m ()
+processPeerOffline :: (MonadManager m, MonadLoggerIO m)
+                   => Child -> Maybe SomeException -> m ()
 processPeerOffline a e = do
     b <- asks onlinePeers
     atomically (findPeerAsync b a) >>= \case
@@ -384,7 +390,7 @@ processPeerOffline a e = do
         "Could not connect to peer "
         <> peerText p <> ": " <> cs (show x)
 
-announcePeer :: MonadManager m => Peer -> m ()
+announcePeer :: (MonadManager m, MonadLoggerIO m) => Peer -> m ()
 announcePeer p = do
     b <- asks onlinePeers
     mgr <- ask
@@ -420,7 +426,12 @@ getNewPeer =
         maybe (return p) (const go) m
 
 
-connectPeer :: (MonadUnliftIO m, MonadManager m) => SockAddr -> m ()
+connectPeer :: ( MonadUnliftIO m
+               , MonadManager m
+               , MonadLoggerIO m
+               )
+            => SockAddr
+            -> m ()
 connectPeer sa = do
     os <- asks onlinePeers
     atomically (findPeerAddress os sa) >>= \case
@@ -437,9 +448,10 @@ connectPeer sa = do
             pub <- asks (peerManagerPub . myConfig)
             nonce <- liftIO randomIO
             bb <- getBestBlock
-            now <- round <$> liftIO getPOSIXTime
+            now <- liftIO getCurrentTime
             let rmt = NetworkAddress (srv net) (sockToHostAddress sa)
-                ver = buildVersion net nonce bb ad rmt now
+                unix = floor (utcTimeToPOSIXSeconds now)
+                ver = buildVersion net nonce bb ad rmt unix
                 text = cs (show sa)
             (inbox, mailbox) <- newMailbox
             let pc = PeerConfig { peerConfPub = pub
@@ -507,12 +519,7 @@ newPeer sa = do
 networkSeeds :: Network -> [HostPort]
 networkSeeds net = map (, getDefaultPort net) (getSeeds net)
 
-gotPong ::
-       TVar [OnlinePeer]
-    -> Word64
-    -> UTCTime
-    -> Peer
-    -> STM ()
+gotPong :: TVar [OnlinePeer] -> Word64 -> UTCTime -> Peer -> STM ()
 gotPong b nonce now p = void . runMaybeT $ do
     o <- MaybeT $ findPeer b p
     (time, old_nonce) <- MaybeT . return $ onlinePeerPing o
@@ -521,13 +528,13 @@ gotPong b nonce now p = void . runMaybeT $ do
     lift $
         insertPeer
             b
-            o
-                { onlinePeerPing = Nothing
-                , onlinePeerPings = take 11 $ diff : onlinePeerPings o
-                }
+            o { onlinePeerPing = Nothing
+              , onlinePeerPings = take 11 $ diff : onlinePeerPings o
+              , onlinePeerLastPong = now
+              }
 
-lastMessage :: TVar [OnlinePeer] -> Peer -> STM (Maybe Word64)
-lastMessage b p = fmap onlinePeerLastMessage <$> findPeer b p
+lastPong :: TVar [OnlinePeer] -> Peer -> STM (Maybe UTCTime)
+lastPong b p = fmap onlinePeerLastPong <$> findPeer b p
 
 setPeerPing :: TVar [OnlinePeer] -> Word64 -> UTCTime -> Peer -> STM ()
 setPeerPing b nonce now p =
@@ -566,7 +573,7 @@ newOnlinePeer ::
     -> Word64
     -> Peer
     -> Async ()
-    -> Word64
+    -> UTCTime
     -> STM OnlinePeer
 newOnlinePeer box addr nonce p peer_async connect_time = do
     let op = OnlinePeer
@@ -580,7 +587,7 @@ newOnlinePeer box addr nonce p peer_async connect_time = do
              , onlinePeerPings = []
              , onlinePeerPing = Nothing
              , onlinePeerConnectTime = connect_time
-             , onlinePeerLastMessage = connect_time
+             , onlinePeerLastPong = connect_time
              }
     insertPeer box op
     return op
@@ -622,7 +629,7 @@ findPeerAddress b a =
     find ((== a) . onlinePeerAddress)
     <$> readTVar b
 
-getPeers :: MonadLoggerIO m => PeerManager -> m [OnlinePeer]
+getPeers :: MonadIO m => PeerManager -> m [OnlinePeer]
 getPeers = runReaderT getConnectedPeers
 
 getOnlinePeer :: MonadIO m
@@ -692,8 +699,8 @@ median ls
         Just . (/ 2) . sum . take 2 $ drop (length ls `div` 2 - 1) ls
     | otherwise = Just . head $ drop (length ls `div` 2) ls
 
-buildVersion ::
-       Network
+buildVersion
+    :: Network
     -> Word64
     -> BlockHeight
     -> NetworkAddress

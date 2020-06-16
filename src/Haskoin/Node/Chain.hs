@@ -41,7 +41,10 @@ import           Data.Maybe                (isJust, isNothing, listToMaybe)
 import           Data.Serialize            (Serialize, get, getWord8, put,
                                             putWord8)
 import           Data.String.Conversions   (cs)
-import           Data.Time.Clock.POSIX     (getPOSIXTime)
+import           Data.Time.Clock           (NominalDiffTime, UTCTime,
+                                            diffUTCTime, getCurrentTime)
+import           Data.Time.Clock.POSIX     (posixSecondsToUTCTime,
+                                            utcTimeToPOSIXSeconds)
 import           Data.Word                 (Word32)
 import           Database.RocksDB          (DB)
 import qualified Database.RocksDB          as R
@@ -50,10 +53,9 @@ import           Database.RocksDB.Query    (Key, KeyValue, insert, insertOp,
 import           Haskoin                   (BlockHash, BlockHeader (..),
                                             BlockHeaders (..), BlockHeight,
                                             BlockNode (..), GetHeaders (..),
-                                            Message (..), Network, Timestamp,
-                                            blockLocator, connectBlocks,
-                                            genesisNode, getAncestor,
-                                            headerHash, splitPoint)
+                                            Message (..), Network, blockLocator,
+                                            connectBlocks, genesisNode,
+                                            getAncestor, headerHash, splitPoint)
 import           Haskoin.Node.Manager      (myVersion)
 import           Haskoin.Node.Peer
 import           NQE                       (Mailbox, Publisher, newMailbox,
@@ -83,7 +85,7 @@ data ChainConfig =
           -- ^ network constants
         , chainConfEvents  :: !(Publisher ChainEvent)
           -- ^ send header chain events here
-        , chainConfTimeout :: !Int
+        , chainConfTimeout :: !NominalDiffTime
           -- ^ timeout in seconds
         }
 
@@ -129,7 +131,7 @@ instance Serialize ChainDataVersionKey where
 
 data ChainSync = ChainSync
     { chainSyncPeer  :: !Peer
-    , chainTimestamp :: !Timestamp
+    , chainTimestamp :: !UTCTime
     , chainHighest   :: !(Maybe BlockNode)
     }
 
@@ -243,7 +245,7 @@ processHeaders ::
        MonadChain m => Peer -> [BlockHeader] -> m ()
 processHeaders p hs = void . runMaybeT $ do
     net <- asks (chainConfNetwork . myConfig)
-    now <- round <$> liftIO getPOSIXTime
+    now <- liftIO getCurrentTime
     pbest <- lift $ withBlockHeaders getBestBlockHeader
     lift (importHeaders net now hs) >>= \case
         Left e -> do
@@ -272,7 +274,6 @@ syncNewPeer =
 
 syncNotif :: MonadChain m => m ()
 syncNotif =
-    round <$> liftIO getPOSIXTime >>=
     notifySynced >>= \x ->
     when x $ withBlockHeaders getBestBlockHeader >>=
     chainEvent . ChainSynced
@@ -285,7 +286,7 @@ syncPeer p = do
                        }
             | p == s -> return g
         _ -> withBlockHeaders getBestBlockHeader
-    now <- round <$> liftIO getPOSIXTime
+    now <- liftIO getCurrentTime
     gh <- syncHeaders now bb p
     $(logDebugS) "Chain" "Requesting headers…"
     MGetHeaders gh `sendMessage` p
@@ -309,13 +310,12 @@ chainMessage (ChainPeerDisconnected p) = do
 
 chainMessage ChainPing = do
     to <- asks (chainConfTimeout . myConfig)
-    now <- round <$> liftIO getPOSIXTime
+    now <- liftIO getCurrentTime
     chainSyncingPeer >>= \case
         Just ChainSync {chainSyncPeer = p, chainTimestamp = t}
-            | now - t > fromIntegral to -> do
+            | now `diffUTCTime` t > to -> do
                 $(logErrorS) "Chain" $
-                    "Syncing peer timed out after "
-                    <> cs (show (now - t)) <> " seconds: "
+                    "Syncing peer timed out: " <> peerText p
                 PeerTimeout `killPeer` p
         _ -> return ()
 
@@ -374,7 +374,7 @@ purgeChainDB = do
 -- from whatever peer delivered these.
 importHeaders :: MonadChain m
               => Network
-              -> Timestamp
+              -> UTCTime
               -> [BlockHeader]
               -> m (Either PeerException Bool)
 importHeaders net now hs =
@@ -396,11 +396,9 @@ importHeaders net now hs =
                 _    -> return True
         Left _ -> throwError PeerSentBadHeaders
   where
-    connect =
-        withBlockHeaders $
-        connectBlocks net now hs
-    get_last =
-        withBlockHeaders . getBlockHeader . headerHash $ last hs
+    timestamp = floor (utcTimeToPOSIXSeconds now)
+    connect = withBlockHeaders $ connectBlocks net timestamp hs
+    get_last = withBlockHeaders . getBlockHeader . headerHash $ last hs
 
 -- | Check if best block header is in sync with the rest of the block chain by
 -- comparing the best block with the current time, verifying that there are no
@@ -409,14 +407,13 @@ importHeaders net now hs =
 -- whether to notify other processes that the header chain has been synced. The
 -- state of the chain will be flipped to synced when this function returns
 -- 'True'.
-notifySynced :: MonadChain m => Timestamp -> m Bool
-notifySynced now =
+notifySynced :: MonadChain m => m Bool
+notifySynced =
     fmap isJust $
     runMaybeT $ do
         bb <- lift $ withBlockHeaders getBestBlockHeader
-        guard $
-            now - blockTimestamp (nodeHeader bb)
-            < 2 * 60 * 60
+        now <- liftIO getCurrentTime
+        guard $ now `diffUTCTime` block_time bb > 7200
         st <- asks chainState
         MaybeT . atomically . runMaybeT $ do
             s <- lift $ readTVar st
@@ -425,6 +422,9 @@ notifySynced now =
             guard . not $ mySynced s
             lift $ writeTVar st s {mySynced = True}
             return ()
+  where
+    block_time =
+        posixSecondsToUTCTime . fromIntegral . blockTimestamp . nodeHeader
 
 -- | Get next peer to sync against from the queue.
 nextPeer :: MonadChain m => m (Maybe Peer)
@@ -434,7 +434,7 @@ nextPeer = listToMaybe . newPeers <$> (asks chainState >>= readTVarIO)
 -- locator to send to that peer for syncing.
 syncHeaders ::
        MonadChain m
-    => Timestamp
+    => UTCTime
     -> BlockNode
     -> Peer
     -> m GetHeaders
@@ -460,7 +460,7 @@ syncHeaders now bb p = do
         }
 
 -- | Set the time of last received data to now if a syncing peer is active.
-setLastReceived :: MonadChain m => Timestamp -> m ()
+setLastReceived :: MonadChain m => UTCTime -> m ()
 setLastReceived now = do
     st <- asks chainState
     atomically . modifyTVar st $ \s ->
