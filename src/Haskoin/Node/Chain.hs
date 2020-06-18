@@ -275,9 +275,7 @@ syncNewPeer :: MonadChain m => m ()
 syncNewPeer = getSyncingPeer >>= \case
     Just _  -> return ()
     Nothing -> nextPeer >>= \case
-        Nothing ->
-            $(logDebugS) "Chain"
-                "No more peers to sync against"
+        Nothing -> return ()
         Just p -> do
             $(logDebugS) "Chain" $
                 "Syncing against peer: " <> peerText p
@@ -344,7 +342,8 @@ chainMessage ChainPing = do
                 $(logErrorS) "Chain" $
                     "Syncing peer timed out: " <> peerText p
                 PeerTimeout `killPeer` p
-        _ -> return ()
+            | otherwise -> return ()
+        Nothing -> syncNewPeer
 
 withSyncLoop :: (MonadUnliftIO m, MonadLoggerIO m)
              => Chain -> m a -> m a
