@@ -519,9 +519,13 @@ getSyncingPeer =
 setSyncingPeer :: MonadChain m => Peer -> m Bool
 setSyncingPeer p =
     setBusy p >>= \case
-        False ->
+        False -> do
+            $(logDebugS) "Chain" $
+                "Could not lock peer: " <> peerText p
             return False
         True  -> do
+            $(logDebugS) "Chain" $
+                "Locked peer: " <> peerText p
             set_it
             return True
   where
@@ -543,9 +547,11 @@ finishPeer :: MonadChain m => Peer -> m ()
 finishPeer p =
     asks chainState >>= remove_peer >>= \case
         False ->
-            $(logDebugS) "Chain" $ "Removed from queue: " <> peerText p
+            $(logDebugS) "Chain" $
+                "Removed peer from queue: " <> peerText p
         True -> do
-            $(logDebugS) "Chain" $ "Release syncing peer: " <> peerText p
+            $(logDebugS) "Chain" $
+                "Releasing syncing peer: " <> peerText p
             setFree p
   where
     remove_peer st = atomically $
