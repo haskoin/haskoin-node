@@ -1,5 +1,5 @@
 name: haskoin-node
-version: 0.13.0
+version: 0.14.0
 synopsis: P2P library for Bitcoin and Bitcoin Cash
 description: Please see the README on GitHub at <https://github.com/haskoin/haskoin-node#readme>
 category: Bitcoin, Finance, Network
@@ -26,7 +26,7 @@ dependencies:
   - monad-logger
   - mtl
   - network
-  - nqe
+  - nqe >= 0.6.3
   - random
   - resourcet
   - rocksdb-haskell

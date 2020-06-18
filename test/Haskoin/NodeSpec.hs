@@ -3,57 +3,46 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings     #-}
 {-# LANGUAGE RecordWildCards       #-}
-{-# LANGUAGE TemplateHaskell       #-}
 module Haskoin.NodeSpec
     ( spec
     ) where
 
-import           Conduit                 (awaitForever, concatMapC, foldC, mapC,
-                                          mapMC, runConduit, takeCE, yield,
-                                          (.|))
-import           Control.Monad           (forM_, forever, replicateM,
-                                          replicateM_)
-import           Control.Monad.Logger    (logDebug, runNoLoggingT)
-import           Control.Monad.Trans     (lift)
-import           Data.ByteString         (ByteString)
-import qualified Data.ByteString         as B
-import           Data.ByteString.Base64  (decodeBase64Lenient)
-import           Data.Either             (fromRight)
-import           Data.Maybe              (isJust, listToMaybe, mapMaybe)
-import           Data.Serialize          (decode, get, runGet, runPut)
-import           Data.String.Conversions (cs)
-import           Data.Time.Clock.POSIX   (getCurrentTime, getPOSIXTime)
-import qualified Database.RocksDB        as R
-import           Haskoin                 (Block (..), BlockHash (..),
-                                          BlockHeader (..), BlockNode (..),
-                                          GetData (..), GetHeaders (..),
-                                          Headers (..), InvType (..),
-                                          InvVector (..), Message (..),
-                                          MessageHeader (..), Network (..),
-                                          NetworkAddress (..), Ping (..),
-                                          Pong (..), VarInt (..), Version (..),
-                                          bchRegTest, btcTest, buildMerkleRoot,
-                                          getGenesisHeader, getMessage,
-                                          headerHash, nodeNetwork, putMessage,
-                                          sockToHostAddress, txHash)
-import           Haskoin.Node            (Chain, ChainEvent (..), Conduits (..),
-                                          NodeConfig (..), NodeEvent (..),
-                                          OnlinePeer (..), Peer, PeerEvent (..),
-                                          PeerManager, WithConnection,
-                                          buildVersion, chainGetAncestor,
-                                          chainGetBest, chainGetParents,
-                                          managerGetPeer, peerGetBlocks,
-                                          peerGetTxs, withConnection, withNode)
-import           Network.Socket          (SockAddr (..))
-import           NQE                     (Inbox, Mailbox, inboxToMailbox,
-                                          newInbox, receive, receiveMatch, send,
-                                          sendSTM)
-import           System.Random           (randomIO, randomRIO)
-import           Test.Hspec              (Spec, describe, it, shouldBe,
-                                          shouldReturn, shouldSatisfy)
-import           UnliftIO                (MonadIO, MonadUnliftIO, liftIO, link,
-                                          throwString, withAsync,
-                                          withSystemTempDirectory)
+import           Conduit                (awaitForever, concatMapC, foldC, mapMC,
+                                         runConduit, takeCE, yield, (.|))
+import           Control.Monad          (forM_, forever, replicateM)
+import           Control.Monad.Logger   (runNoLoggingT)
+import           Control.Monad.Trans    (lift)
+import           Data.ByteString        (ByteString)
+import qualified Data.ByteString        as B
+import           Data.ByteString.Base64 (decodeBase64Lenient)
+import           Data.Either            (fromRight)
+import           Data.List              (find)
+import           Data.Maybe             (isJust, mapMaybe)
+import           Data.Serialize         (decode, get, runGet, runPut)
+import           Data.Time.Clock.POSIX  (getPOSIXTime)
+import qualified Database.RocksDB       as R
+import           Haskoin                (Block (..), BlockHash (..),
+                                         BlockHeader (..), BlockNode (..),
+                                         GetData (..), GetHeaders (..),
+                                         Headers (..), InvType (..),
+                                         InvVector (..), Message (..),
+                                         MessageHeader (..), Network (..),
+                                         NetworkAddress (..), Ping (..),
+                                         Pong (..), VarInt (..), Version (..),
+                                         bchRegTest, buildMerkleRoot,
+                                         getMessage, headerHash, nodeNetwork,
+                                         putMessage, sockToHostAddress, txHash)
+import           Haskoin.Node
+import           Network.Socket         (SockAddr (..))
+import           NQE                    (Inbox, Mailbox, inboxToMailbox,
+                                         newInbox, receive, receiveMatch, send,
+                                         withPublisher, withSubscription)
+import           System.Random          (randomIO)
+import           Test.Hspec             (Spec, describe, it, shouldBe,
+                                         shouldSatisfy)
+import           UnliftIO               (MonadIO, MonadUnliftIO, liftIO,
+                                         throwString, withAsync,
+                                         withSystemTempDirectory)
 
 data TestNode = TestNode
     { testMgr    :: PeerManager
@@ -61,7 +50,10 @@ data TestNode = TestNode
     , nodeEvents :: Inbox NodeEvent
     }
 
-dummyPeerConnect :: Network -> NetworkAddress -> WithConnection
+dummyPeerConnect :: Network
+                 -> NetworkAddress
+                 -> SockAddr
+                 -> WithConnection
 dummyPeerConnect net ad sa f = do
     r <- newInbox
     s <- newInbox
@@ -105,7 +97,7 @@ mockPeerReact (MGetHeaders (GetHeaders _ _hs _)) = [MHeaders (Headers hs')]
     hs' = map f allBlocks
 mockPeerReact (MGetData (GetData ivs)) = mapMaybe f ivs
   where
-    f (InvVector InvBlock h) = MBlock <$> listToMaybe (filter (l h) allBlocks)
+    f (InvVector InvBlock h) = MBlock <$> find (l h) allBlocks
     f _                      = Nothing
     l h b = headerHash (blockHeader b) == BlockHash h
 mockPeerReact _ = []
@@ -119,7 +111,7 @@ spec = do
             withTestNode net "connect-one-peer" $ \TestNode {..} -> do
                 p <- waitForPeer nodeEvents
                 Just OnlinePeer {onlinePeerVersion = Just Version {version = ver}} <-
-                    managerGetPeer p testMgr
+                    getOnlinePeer p testMgr
                 ver `shouldSatisfy` (>= 70002)
         it "downloads some blocks" $
             withTestNode net "get-blocks" $ \TestNode {..} -> do
@@ -128,7 +120,7 @@ spec = do
                     h2 =
                         "0c89955fc5c9f98ecc71954f167b938138c90c6a094c4737f2e901669d26763f"
                 p <- waitForPeer nodeEvents
-                pbs <- peerGetBlocks net 10 p [h1, h2]
+                pbs <- getBlocks net 10 p [h1, h2]
                 pbs `shouldSatisfy` isJust
                 let Just [b1, b2] = pbs
                 headerHash (blockHeader b1) `shouldBe` h1
@@ -178,7 +170,7 @@ spec = do
 waitForPeer :: MonadIO m => Inbox NodeEvent -> m Peer
 waitForPeer inbox =
     receiveMatch inbox $ \case
-        PeerEvent (PeerConnected p _) -> Just p
+        PeerEvent (PeerConnected p) -> Just p
         _ -> Nothing
 
 withTestNode ::
@@ -189,8 +181,8 @@ withTestNode ::
     -> m a
 withTestNode net str f =
     runNoLoggingT $
-    withSystemTempDirectory ("haskoin-node-test-" <> str <> "-") $ \w -> do
-        node_inbox <- newInbox
+    withSystemTempDirectory ("haskoin-node-test-" <> str <> "-") $ \w ->
+    withPublisher $ \pub -> do
         db <-
             R.open
                 w
@@ -199,30 +191,38 @@ withTestNode net str f =
                     , R.errorIfExists = True
                     , R.compression = R.SnappyCompression
                     }
-        let ad = NetworkAddress nodeNetwork (sockToHostAddress (SockAddrInet 0 0))
-            cfg =
-                NodeConfig
-                    { nodeConfMaxPeers = 20
-                    , nodeConfDB = db
-                    , nodeConfPeers = [("127.0.0.1", 17486)]
-                    , nodeConfDiscover = False
-                    , nodeConfNetAddr = NetworkAddress 0 (sockToHostAddress (SockAddrInet 0 0))
-                    , nodeConfNet = net
-                    , nodeConfEvents = (`sendSTM` node_inbox)
-                    , nodeConfTimeout = 120
-                    , nodeConfPeerOld = 48 * 3600
-                    , nodeConfConnect = dummyPeerConnect net ad
-                    }
-        withNode cfg $ \(mgr, ch) ->
+        let ad = NetworkAddress
+                 nodeNetwork
+                 (sockToHostAddress (SockAddrInet 0 0))
+            na = NetworkAddress
+                 0
+                 (sockToHostAddress (SockAddrInet 0 0))
+            cfg = NodeConfig
+                  { nodeConfMaxPeers = 20
+                  , nodeConfDB = db
+                  , nodeConfPeers = [("127.0.0.1", 17486)]
+                  , nodeConfDiscover = False
+                  , nodeConfNetAddr = na
+                  , nodeConfNet = net
+                  , nodeConfEvents = pub
+                  , nodeConfTimeout = 120
+                  , nodeConfPeerMaxLife = 48 * 3600
+                  , nodeConfConnect = dummyPeerConnect net ad
+                  }
+        withNode cfg $ \(Node mgr ch) ->
+            withSubscription pub $ \sub ->
             lift $
-            f TestNode {testMgr = mgr, testChain = ch, nodeEvents = node_inbox}
+            f TestNode { testMgr = mgr
+                       , testChain = ch
+                       , nodeEvents = sub
+                       }
 
 allBlocks :: [Block]
 allBlocks =
     fromRight (error "Could not decode blocks") $
     runGet f (decodeBase64Lenient allBlocksBase64)
   where
-    f = mapM (const get) [1..15]
+    f = mapM (const get) [(1 :: Int) .. 15]
 
 allBlocksBase64 :: ByteString
 allBlocksBase64 =
