@@ -547,7 +547,7 @@ gotPong b nonce now p = void . runMaybeT $ do
         insertPeer
             b
             o { onlinePeerPing = Nothing
-              , onlinePeerPings = take 11 $ diff : onlinePeerPings o
+              , onlinePeerPings = sort $ take 11 $ diff : onlinePeerPings o
               }
 
 setPeerPing :: TVar [OnlinePeer] -> Word64 -> UTCTime -> Peer -> STM ()
@@ -711,12 +711,18 @@ toSockAddr (host, port) = go `catch` e
     e :: Monad m => SomeException -> m [SockAddr]
     e _ = return []
 
-median :: Fractional a => [a] -> Maybe a
+median :: (Ord a, Fractional a) => [a] -> Maybe a
 median ls
-    | null ls = Nothing
+    | null ls =
+          Nothing
     | length ls `mod` 2 == 0 =
-        Just . (/ 2) . sum . take 2 $ drop (length ls `div` 2 - 1) ls
-    | otherwise = Just . head $ drop (length ls `div` 2) ls
+          Just . (/ 2) . sum . take 2 $
+          drop (length ls `div` 2 - 1) ls'
+    | otherwise =
+          Just . head $
+          drop (length ls `div` 2) ls'
+  where
+    ls' = sort ls
 
 buildVersion
     :: Network
