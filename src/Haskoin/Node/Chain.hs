@@ -25,7 +25,7 @@ module Haskoin.Node.Chain
     , chainHeaders
     ) where
 
-import           Control.Monad             (forM_, forever, guard, void, when)
+import           Control.Monad             (forM_, forever, guard, when)
 import           Control.Monad.Except      (runExceptT, throwError)
 import           Control.Monad.Logger      (MonadLoggerIO, logDebugS, logErrorS,
                                             logInfoS)
@@ -245,20 +245,20 @@ chainEvent e = do
     publish e pub
 
 processHeaders :: MonadChain m => Peer -> [BlockHeader] -> m ()
-processHeaders p hs = void . runMaybeT $ do
+processHeaders p hs = do
     $(logDebugS) "Chain" $
         "Processing " <> cs (show (length hs))
         <> " headers from peer: " <> peerText p
     net <- asks (chainConfNetwork . myConfig)
     now <- liftIO getCurrentTime
-    pbest <- lift $ withBlockHeaders getBestBlockHeader
-    lift (importHeaders net now hs) >>= \case
+    pbest <- withBlockHeaders getBestBlockHeader
+    importHeaders net now hs >>= \case
         Left e -> do
             $(logErrorS) "Chain" $
                 "Could not connect headers from peer: "
                 <> peerText p
             e `killPeer` p
-        Right done -> lift $ do
+        Right done -> do
             setLastReceived
             best <- withBlockHeaders getBestBlockHeader
             when (nodeHeader pbest /= nodeHeader best) $
@@ -272,13 +272,10 @@ processHeaders p hs = void . runMaybeT $ do
                 else syncPeer p
 
 syncNewPeer :: MonadChain m => m ()
-syncNewPeer =
-    getSyncingPeer >>= \s ->
-    when (isNothing s) $
-    nextPeer >>= \case
-        Nothing ->
-            $(logDebugS) "Chain"
-                "No more peers to sync against"
+syncNewPeer = getSyncingPeer >>= \case
+    Just _  -> return ()
+    Nothing -> nextPeer >>= \case
+        Nothing -> return ()
         Just p -> do
             $(logDebugS) "Chain" $
                 "Syncing against peer: " <> peerText p
@@ -286,9 +283,10 @@ syncNewPeer =
 
 syncNotif :: MonadChain m => m ()
 syncNotif =
-    notifySynced >>= \x ->
-    when x $ withBlockHeaders getBestBlockHeader >>=
-    chainEvent . ChainSynced
+    notifySynced >>= \case
+        False -> return ()
+        True  -> withBlockHeaders getBestBlockHeader >>=
+                 chainEvent . ChainSynced
 
 syncPeer :: MonadChain m => Peer -> m ()
 syncPeer p = do
@@ -302,11 +300,12 @@ syncPeer p = do
         Nothing -> syncing_new t
     forM_ m $ \g -> do
         $(logDebugS) "Chain" $
-            "Requesting headers from peer: " <> peerText p
+            "Requesting headers from peer: "
+            <> peerText p
         MGetHeaders g `sendMessage` p
   where
     syncing_new t =
-        setBusy p >>= \case
+        setSyncingPeer p >>= \case
             False -> return Nothing
             True -> do
                 $(logDebugS) "Chain" $
@@ -343,7 +342,8 @@ chainMessage ChainPing = do
                 $(logErrorS) "Chain" $
                     "Syncing peer timed out: " <> peerText p
                 PeerTimeout `killPeer` p
-        _ -> return ()
+            | otherwise -> return ()
+        Nothing -> syncNewPeer
 
 withSyncLoop :: (MonadUnliftIO m, MonadLoggerIO m)
              => Chain -> m a -> m a
@@ -454,14 +454,15 @@ notifySynced =
 
 -- | Get next peer to sync against from the queue.
 nextPeer :: MonadChain m => m (Maybe Peer)
-nextPeer =
-    go =<< newPeers <$> (readTVarIO =<< asks chainState)
+nextPeer = do
+    ps <- newPeers <$> (readTVarIO =<< asks chainState)
+    go ps
   where
     go [] = return Nothing
     go (p:ps) =
-        getBusy p >>= \case
-            True  -> go ps
-            False -> return (Just p)
+        setSyncingPeer p >>= \case
+            True -> return (Just p)
+            False -> go ps
 
 -- | Set a syncing peer and generate a 'GetHeaders' data structure with a block
 -- locator to send to that peer for syncing.
@@ -514,24 +515,59 @@ getSyncingPeer :: MonadChain m => m (Maybe Peer)
 getSyncingPeer =
     fmap chainSyncPeer . chainSyncing <$> (readTVarIO =<< asks chainState)
 
+setSyncingPeer :: MonadChain m => Peer -> m Bool
+setSyncingPeer p =
+    setBusy p >>= \case
+        False -> do
+            $(logDebugS) "Chain" $
+                "Could not lock peer: " <> peerText p
+            return False
+        True  -> do
+            $(logDebugS) "Chain" $
+                "Locked peer: " <> peerText p
+            set_it
+            return True
+  where
+    set_it = do
+        now <- liftIO getCurrentTime
+        box <- asks chainState
+        atomically $ modifyTVar box $ \s ->
+            s { chainSyncing =
+                      Just ChainSync { chainSyncPeer = p
+                                     , chainTimestamp = now
+                                     , chainHighest = Nothing
+                                     }
+              }
+
+
 -- | Remove a peer from the queue of peers to sync and unset the syncing peer if
--- it is set to the provided value.
+-- it is set to the provided peer.
 finishPeer :: MonadChain m => Peer -> m ()
 finishPeer p =
-    asks chainState >>=
-    remove_peer >>= \x -> when x $ do
-    $(logDebugS) "Chain" $ "Free peer: " <> peerText p
-    setFree p
+    asks chainState >>= remove_peer >>= \case
+        False ->
+            $(logDebugS) "Chain" $
+                "Removed peer from queue: " <> peerText p
+        True -> do
+            $(logDebugS) "Chain" $
+                "Releasing syncing peer: " <> peerText p
+            setFree p
   where
-    remove_peer st =
-        atomically $ readTVar st >>= \s -> do
-            let is_me = maybe False ((== p) . chainSyncPeer) (chainSyncing s)
-                new_sync = if is_me then Nothing else chainSyncing s
-                new_peers = delete p (newPeers s)
-            writeTVar st $
-                s { newPeers = new_peers
-                  , chainSyncing = new_sync }
-            return is_me
+    remove_peer st = atomically $
+        readTVar st >>= \s -> case chainSyncing s of
+            Just ChainSync { chainSyncPeer = p' }
+                | p == p' -> do
+                      unset_syncing st
+                      return True
+            _ -> do
+                remove_from_queue st
+                return False
+    unset_syncing st =
+        modifyTVar st $ \x ->
+            x { chainSyncing = Nothing }
+    remove_from_queue st =
+        modifyTVar st $ \x ->
+            x { newPeers = delete p (newPeers x) }
 
 -- | Return syncing peer data.
 chainSyncingPeer :: MonadChain m => m (Maybe ChainSync)
