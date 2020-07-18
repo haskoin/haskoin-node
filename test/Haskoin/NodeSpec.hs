@@ -15,6 +15,7 @@ import           Control.Monad.Trans    (lift)
 import           Data.ByteString        (ByteString)
 import qualified Data.ByteString        as B
 import           Data.ByteString.Base64 (decodeBase64Lenient)
+import           Data.Default           (def)
 import           Data.Either            (fromRight)
 import           Data.List              (find)
 import           Data.Maybe             (isJust, mapMaybe)
@@ -183,14 +184,9 @@ withTestNode net str f =
     runNoLoggingT $
     withSystemTempDirectory ("haskoin-node-test-" <> str <> "-") $ \w ->
     withPublisher $ \pub -> do
-        db <-
-            R.open
-                w
-                R.defaultOptions
-                    { R.createIfMissing = True
-                    , R.errorIfExists = True
-                    , R.compression = R.SnappyCompression
-                    }
+        opts <- R.newOptions
+            def { R.createIfMissing = True, R.errorIfExists = True }
+        db <- R.open w opts
         let ad = NetworkAddress
                  nodeNetwork
                  (sockToHostAddress (SockAddrInet 0 0))

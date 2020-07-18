@@ -66,7 +66,6 @@ import           UnliftIO                  (MonadIO, MonadUnliftIO, TVar,
                                             modifyTVar, newTVarIO, readTVar,
                                             readTVarIO, withAsync, writeTVar)
 import           UnliftIO.Concurrent       (threadDelay)
-import           UnliftIO.Resource         (runResourceT)
 
 -- | Mailbox for chain header syncing process.
 data Chain = Chain { chainMailbox :: !(Mailbox ChainMessage)
@@ -382,15 +381,15 @@ initChainDB = do
 purgeChainDB :: MonadChain m => m [R.BatchOp]
 purgeChainDB = do
     db <- asks (chainConfDB . myConfig)
-    runResourceT . R.withIterator db def $ \it -> do
-        R.iterSeek it $ B.singleton 0x90
-        recurse_delete it db
+    it <- R.createIter db def
+    R.iterSeek it $ B.singleton 0x90
+    recurse_delete it db
   where
     recurse_delete it db =
         R.iterKey it >>= \case
             Just k
                 | B.head k == 0x90 || B.head k == 0x91 -> do
-                    R.delete db def k
+                    R.delete db k
                     R.iterNext it
                     (R.Del k :) <$> recurse_delete it db
             _ -> return []

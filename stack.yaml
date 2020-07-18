@@ -12,3 +12,7 @@ extra-deps:
     commit: d313ac58b2f22fa7570a5e1234244b7249a48382
   - github: haskoin/secp256k1-haskell
     commit: 239159122cc6f830957759a1d247ded7ffeba915
+  - github: jprupp/rocksdb-haskell
+    commit: c7b6c452d5de7e0df4961e06642123c2374819ac
+  - github: jprupp/rocksdb-query
+    commit: f900f220d34263e004a059210c6899925f61bc39
