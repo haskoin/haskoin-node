@@ -183,10 +183,8 @@ withTestNode ::
 withTestNode net str f =
     runNoLoggingT $
     withSystemTempDirectory ("haskoin-node-test-" <> str <> "-") $ \w ->
-    withPublisher $ \pub -> do
-        opts <- R.newOptions
-            def { R.createIfMissing = True, R.errorIfExists = True }
-        db <- R.open w opts
+    withPublisher $ \pub ->
+    R.withDB w def{R.createIfMissing = True, R.errorIfExists = True} $ \db -> do
         let ad = NetworkAddress
                  nodeNetwork
                  (sockToHostAddress (SockAddrInet 0 0))

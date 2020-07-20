@@ -34,7 +34,6 @@ import           Control.Monad.Reader      (MonadReader, ReaderT, ask, asks,
 import           Control.Monad.Trans       (lift)
 import           Control.Monad.Trans.Maybe (MaybeT (..), runMaybeT)
 import qualified Data.ByteString           as B
-import           Data.Default              (def)
 import           Data.Function             (on)
 import           Data.List                 (delete, nub)
 import           Data.Maybe                (isJust, isNothing)
@@ -176,10 +175,10 @@ instance (Monad m, MonadIO m, MonadReader DB m) =>
         h = headerHash (nodeHeader bn)
     getBlockHeader bh = do
         db <- ask
-        retrieve db def (BlockHeaderKey bh)
+        retrieve db (BlockHeaderKey bh)
     getBestBlockHeader = do
         db <- ask
-        retrieve db def BestBlockKey >>= \case
+        retrieve db BestBlockKey >>= \case
             Nothing -> error "Could not get best block from database"
             Just b -> return b
     setBestBlockHeader bn = do
@@ -367,10 +366,10 @@ initChainDB :: MonadChain m => m ()
 initChainDB = do
     db <- asks (chainConfDB . myConfig)
     net <- asks (chainConfNetwork . myConfig)
-    ver <- retrieve db def ChainDataVersionKey
+    ver <- retrieve db ChainDataVersionKey
     when (ver /= Just dataVersion) $ purgeChainDB >>= writeBatch db
     insert db ChainDataVersionKey dataVersion
-    retrieve db def BestBlockKey >>= \b ->
+    retrieve db BestBlockKey >>= \b ->
         when (isNothing (b :: Maybe BlockNode)) $
         withBlockHeaders $ do
             addBlockHeader (genesisNode net)
@@ -381,9 +380,9 @@ initChainDB = do
 purgeChainDB :: MonadChain m => m [R.BatchOp]
 purgeChainDB = do
     db <- asks (chainConfDB . myConfig)
-    it <- R.createIter db def
-    R.iterSeek it $ B.singleton 0x90
-    recurse_delete it db
+    R.withIter db $ \it -> do
+        R.iterSeek it $ B.singleton 0x90
+        recurse_delete it db
   where
     recurse_delete it db =
         R.iterKey it >>= \case
