@@ -16,27 +16,27 @@ packages:
   original:
     url: https://github.com/jprupp/nqe/archive/acbed8c6f39055b33e9c24de3ce634cfc2d8de88.tar.gz
 - completed:
-    size: 266117
-    url: https://github.com/haskoin/haskoin-core/archive/d313ac58b2f22fa7570a5e1234244b7249a48382.tar.gz
+    size: 288753
+    url: https://github.com/haskoin/haskoin-core/archive/c90b178dd478e7f268dce0c8de9a49708f8a5774.tar.gz
     name: haskoin-core
     version: 0.14.1
-    sha256: c33453bad087010a282a59d801dc56abfe5478cf06522e48a16c1e59e68a2b67
+    sha256: d35dac68486207406834b5d5d0691e69de6730c786857bb0521eaac0888b2cc8
     pantry-tree:
-      size: 4977
-      sha256: 1d49211744296e7fb946a02e7959ad46581165ef8977cac3f44bfd53570f9ca3
+      size: 5370
+      sha256: 1fa53ff630402239c70367eec71a06203acc4caa7a724ce93693dbab540fde11
   original:
-    url: https://github.com/haskoin/haskoin-core/archive/d313ac58b2f22fa7570a5e1234244b7249a48382.tar.gz
+    url: https://github.com/haskoin/haskoin-core/archive/c90b178dd478e7f268dce0c8de9a49708f8a5774.tar.gz
 - completed:
-    size: 13899
-    url: https://github.com/haskoin/secp256k1-haskell/archive/239159122cc6f830957759a1d247ded7ffeba915.tar.gz
+    size: 12959
+    url: https://github.com/haskoin/secp256k1-haskell/archive/5430374aceca6726765fb80c3782b005482804ef.tar.gz
     name: secp256k1-haskell
-    version: 0.3.0
-    sha256: 748bdcc885ec1e0c1b5db4896651f963d8a29dee7237e7f604c828be0d1ed2b2
+    version: 0.4.0
+    sha256: e4f3838f50df224a93417c98d3dad5ad12710806607278e57f08e557792db727
     pantry-tree:
-      size: 859
-      sha256: 59325b14a11858dfbeb7b788018401e061c2a24ca4c1609d5a39932f4b478167
+      size: 858
+      sha256: 759710d0f76cba618c65b463ec43531a7f6f676a4e3c2a2f8a5737f3fe560ee9
   original:
-    url: https://github.com/haskoin/secp256k1-haskell/archive/239159122cc6f830957759a1d247ded7ffeba915.tar.gz
+    url: https://github.com/haskoin/secp256k1-haskell/archive/5430374aceca6726765fb80c3782b005482804ef.tar.gz
 - completed:
     size: 10222
     url: https://github.com/jprupp/rocksdb-haskell/archive/7bc824e8d07ed5a776735caae0b52fc1edf7286d.tar.gz

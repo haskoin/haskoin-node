@@ -9,9 +9,9 @@ extra-deps:
   - github: jprupp/nqe
     commit: acbed8c6f39055b33e9c24de3ce634cfc2d8de88
   - github: haskoin/haskoin-core
-    commit: d313ac58b2f22fa7570a5e1234244b7249a48382
+    commit: c90b178dd478e7f268dce0c8de9a49708f8a5774
   - github: haskoin/secp256k1-haskell
-    commit: 239159122cc6f830957759a1d247ded7ffeba915
+    commit: 5430374aceca6726765fb80c3782b005482804ef
   - github: jprupp/rocksdb-haskell
     commit: 7bc824e8d07ed5a776735caae0b52fc1edf7286d
   - github: jprupp/rocksdb-query
