@@ -19,7 +19,7 @@ import           Data.Conduit.Network    (appSink, appSource, clientSettings,
                                           runTCPClient)
 import           Data.String.Conversions (cs)
 import           Data.Time.Clock         (NominalDiffTime)
-import           Database.RocksDB        (DB)
+import           Database.RocksDB        (ColumnFamily, DB)
 import           Haskoin                 (Addr (..), BlockNode (..),
                                           Headers (..), Message (..), Network,
                                           NetworkAddress, Ping (..), Pong (..))
@@ -36,25 +36,27 @@ import           UnliftIO                (MonadUnliftIO, SomeException, catch,
 
 -- | General node configuration.
 data NodeConfig = NodeConfig
-    { nodeConfMaxPeers    :: !Int
+    { nodeConfMaxPeers     :: !Int
       -- ^ maximum number of connected peers allowed
-    , nodeConfDB          :: !DB
+    , nodeConfDB           :: !DB
       -- ^ database handler
-    , nodeConfPeers       :: ![HostPort]
+    , nodeConfColumnFamily :: !(Maybe ColumnFamily)
+      -- ^ database column family
+    , nodeConfPeers        :: ![HostPort]
       -- ^ static list of peers to connect to
-    , nodeConfDiscover    :: !Bool
+    , nodeConfDiscover     :: !Bool
       -- ^ activate peer discovery
-    , nodeConfNetAddr     :: !NetworkAddress
+    , nodeConfNetAddr      :: !NetworkAddress
       -- ^ network address for the local host
-    , nodeConfNet         :: !Network
+    , nodeConfNet          :: !Network
       -- ^ network constants
-    , nodeConfEvents      :: !(Publisher NodeEvent)
+    , nodeConfEvents       :: !(Publisher NodeEvent)
       -- ^ node events are sent to this publisher
-    , nodeConfTimeout     :: !NominalDiffTime
+    , nodeConfTimeout      :: !NominalDiffTime
       -- ^ timeout in seconds
-    , nodeConfPeerMaxLife :: !NominalDiffTime
+    , nodeConfPeerMaxLife  :: !NominalDiffTime
       -- ^ peer disconnect after seconds
-    , nodeConfConnect     :: !(SockAddr -> WithConnection)
+    , nodeConfConnect      :: !(SockAddr -> WithConnection)
     }
 
 data Node = Node { nodeManager :: !PeerManager
@@ -166,6 +168,7 @@ withNode cfg action =
     chain_config ch_pub =
         ChainConfig
             { chainConfDB = nodeConfDB cfg
+            , chainConfColumnFamily = nodeConfColumnFamily cfg
             , chainConfNetwork = nodeConfNet cfg
             , chainConfEvents = ch_pub
             , chainConfTimeout = nodeConfTimeout cfg

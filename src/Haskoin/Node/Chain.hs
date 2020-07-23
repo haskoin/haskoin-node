@@ -29,7 +29,7 @@ import           Control.Monad             (forM_, forever, guard, when)
 import           Control.Monad.Except      (runExceptT, throwError)
 import           Control.Monad.Logger      (MonadLoggerIO, logDebugS, logErrorS,
                                             logInfoS)
-import           Control.Monad.Reader      (MonadReader, ReaderT, ask, asks,
+import           Control.Monad.Reader      (MonadReader, ReaderT, asks,
                                             runReaderT)
 import           Control.Monad.Trans       (lift)
 import           Control.Monad.Trans.Maybe (MaybeT (..), runMaybeT)
@@ -45,10 +45,11 @@ import           Data.Time.Clock           (NominalDiffTime, UTCTime,
 import           Data.Time.Clock.POSIX     (posixSecondsToUTCTime,
                                             utcTimeToPOSIXSeconds)
 import           Data.Word                 (Word32)
-import           Database.RocksDB          (DB)
+import           Database.RocksDB          (ColumnFamily, DB)
 import qualified Database.RocksDB          as R
-import           Database.RocksDB.Query    (Key, KeyValue, insert, insertOp,
-                                            retrieve, writeBatch)
+import           Database.RocksDB.Query    (Key, KeyValue, insert, insertCF,
+                                            insertOp, insertOpCF,
+                                            retrieveCommon, writeBatch)
 import           Haskoin                   (BlockHash, BlockHeader (..),
                                             BlockHeaders (..), BlockHeight,
                                             BlockNode (..), GetHeaders (..),
@@ -77,13 +78,15 @@ instance Eq Chain where
 -- | Configuration for chain syncing process.
 data ChainConfig =
     ChainConfig
-        { chainConfDB      :: !DB
+        { chainConfDB           :: !DB
           -- ^ database handle
-        , chainConfNetwork :: !Network
+        , chainConfColumnFamily :: !(Maybe ColumnFamily)
+          -- ^ column family
+        , chainConfNetwork      :: !Network
           -- ^ network constants
-        , chainConfEvents  :: !(Publisher ChainEvent)
+        , chainConfEvents       :: !(Publisher ChainEvent)
           -- ^ send header chain events here
-        , chainConfTimeout :: !NominalDiffTime
+        , chainConfTimeout      :: !NominalDiffTime
           -- ^ timeout in seconds
         }
 
@@ -166,35 +169,43 @@ instance Serialize BestBlockKey where
         return BestBlockKey
     put BestBlockKey = putWord8 0x91
 
-instance (Monad m, MonadIO m, MonadReader DB m) =>
+instance (Monad m, MonadIO m, MonadReader ChainConfig m) =>
          BlockHeaders m where
     addBlockHeader bn = do
-        db <- ask
-        insert db (BlockHeaderKey h) bn
+        db <- asks chainConfDB
+        asks chainConfColumnFamily >>= \case
+            Nothing -> insert db (BlockHeaderKey h) bn
+            Just cf -> insertCF db cf (BlockHeaderKey h) bn
       where
         h = headerHash (nodeHeader bn)
     getBlockHeader bh = do
-        db <- ask
-        retrieve db (BlockHeaderKey bh)
+        db <- asks chainConfDB
+        mcf <- asks chainConfColumnFamily
+        retrieveCommon db mcf (BlockHeaderKey bh)
     getBestBlockHeader = do
-        db <- ask
-        retrieve db BestBlockKey >>= \case
+        db <- asks chainConfDB
+        mcf <- asks chainConfColumnFamily
+        retrieveCommon db mcf BestBlockKey >>= \case
             Nothing -> error "Could not get best block from database"
             Just b -> return b
     setBestBlockHeader bn = do
-        db <- ask
-        insert db BestBlockKey bn
+        db <- asks chainConfDB
+        asks chainConfColumnFamily >>= \case
+            Nothing -> insert db BestBlockKey bn
+            Just cf -> insertCF db cf BestBlockKey bn
     addBlockHeaders bns = do
-        db <- ask
-        writeBatch db (map f bns)
+        db <- asks chainConfDB
+        mcf <- asks chainConfColumnFamily
+        writeBatch db (map (f mcf) bns)
       where
         h bn = headerHash (nodeHeader bn)
-        f bn = insertOp (BlockHeaderKey (h bn)) bn
+        f Nothing bn   = insertOp (BlockHeaderKey (h bn)) bn
+        f (Just cf) bn = insertOpCF cf (BlockHeaderKey (h bn)) bn
 
-withBlockHeaders :: MonadChain m => ReaderT DB m a -> m a
+withBlockHeaders :: MonadChain m => ReaderT ChainConfig m a -> m a
 withBlockHeaders f = do
-    db <- asks (chainConfDB . myConfig)
-    runReaderT f db
+    cfg <- asks myConfig
+    runReaderT f cfg
 
 -- | Launch process to synchronize block headers in current thread.
 withChain ::
@@ -365,11 +376,14 @@ dataVersion = 1
 initChainDB :: MonadChain m => m ()
 initChainDB = do
     db <- asks (chainConfDB . myConfig)
+    mcf <- asks (chainConfColumnFamily . myConfig)
     net <- asks (chainConfNetwork . myConfig)
-    ver <- retrieve db ChainDataVersionKey
+    ver <- retrieveCommon db mcf ChainDataVersionKey
     when (ver /= Just dataVersion) $ purgeChainDB >>= writeBatch db
-    insert db ChainDataVersionKey dataVersion
-    retrieve db BestBlockKey >>= \b ->
+    case mcf of
+        Nothing -> insert db ChainDataVersionKey dataVersion
+        Just cf -> insertCF db cf ChainDataVersionKey dataVersion
+    retrieveCommon db mcf BestBlockKey >>= \b ->
         when (isNothing (b :: Maybe BlockNode)) $
         withBlockHeaders $ do
             addBlockHeader (genesisNode net)
@@ -380,17 +394,22 @@ initChainDB = do
 purgeChainDB :: MonadChain m => m [R.BatchOp]
 purgeChainDB = do
     db <- asks (chainConfDB . myConfig)
-    R.withIter db $ \it -> do
+    mcf <- asks (chainConfColumnFamily . myConfig)
+    f db mcf $ \it -> do
         R.iterSeek it $ B.singleton 0x90
-        recurse_delete it db
+        recurse_delete it db mcf
   where
-    recurse_delete it db =
+    f db Nothing   = R.withIter db
+    f db (Just cf) = R.withIterCF db cf
+    recurse_delete it db mcf =
         R.iterKey it >>= \case
             Just k
                 | B.head k == 0x90 || B.head k == 0x91 -> do
-                    R.delete db k
+                    case mcf of
+                        Nothing -> R.delete db k
+                        Just cf -> R.deleteCF db cf k
                     R.iterNext it
-                    (R.Del k :) <$> recurse_delete it db
+                    (R.Del k :) <$> recurse_delete it db mcf
             _ -> return []
 
 -- | Import a bunch of continuous headers. Returns 'True' if the number of
@@ -576,12 +595,12 @@ chainSyncingPeer =
 chainGetBlock :: MonadIO m
               => BlockHash -> Chain -> m (Maybe BlockNode)
 chainGetBlock bh ch =
-    runReaderT (getBlockHeader bh) (chainConfDB (myConfig (chainReader ch)))
+    runReaderT (getBlockHeader bh) (myConfig (chainReader ch))
 
 -- | Get best block header from chain process.
 chainGetBest :: MonadIO m => Chain -> m BlockNode
 chainGetBest ch =
-    runReaderT getBestBlockHeader (chainConfDB (myConfig (chainReader ch)))
+    runReaderT getBestBlockHeader (myConfig (chainReader ch))
 
 -- | Get ancestor of 'BlockNode' at 'BlockHeight' from chain process.
 chainGetAncestor :: MonadIO m
@@ -590,7 +609,7 @@ chainGetAncestor :: MonadIO m
                  -> Chain
                  -> m (Maybe BlockNode)
 chainGetAncestor h bn ch =
-    runReaderT (getAncestor h bn) (chainConfDB (myConfig (chainReader ch)))
+    runReaderT (getAncestor h bn) (myConfig (chainReader ch))
 
 -- | Get parents of 'BlockNode' starting at 'BlockHeight' from chain process.
 chainGetParents :: MonadIO m
@@ -616,7 +635,7 @@ chainGetSplitBlock :: MonadIO m
                    -> Chain
                    -> m BlockNode
 chainGetSplitBlock l r ch =
-    runReaderT (splitPoint l r) (chainConfDB (myConfig (chainReader ch)))
+    runReaderT (splitPoint l r) (myConfig (chainReader ch))
 
 -- | Notify chain that a new peer is connected.
 chainPeerConnected :: MonadIO m

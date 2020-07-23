@@ -6,13 +6,9 @@ nix:
     - zlib
     - pkg-config
 extra-deps:
-  - github: jprupp/nqe
-    commit: acbed8c6f39055b33e9c24de3ce634cfc2d8de88
-  - github: haskoin/haskoin-core
-    commit: c90b178dd478e7f268dce0c8de9a49708f8a5774
-  - github: haskoin/secp256k1-haskell
-    commit: 5430374aceca6726765fb80c3782b005482804ef
+  - nqe-0.6.3
+  - haskoin-core-0.15.0
+  - secp256k1-haskell-0.4.0
   - github: jprupp/rocksdb-haskell
-    commit: 7bc824e8d07ed5a776735caae0b52fc1edf7286d
-  - github: jprupp/rocksdb-query
-    commit: b1a6f9a5e44f21d641f4b9343329e194ef6be6ba
+    commit: cf0d42018452a0ba3dd38eda7a0e6a3b498bbb1d
+  - rocksdb-query-0.4.2

@@ -4,10 +4,10 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 8910b7a1cab081e2bc9808f152235026188f3dccc612d569cfa102a5fe7fa709
+-- hash: b80c691ed899f492d1f0f3165f9f4a78f85253ba1a6bd61a3b4705075572ccae
 
 name:           haskoin-node
-version:        0.15.0
+version:        0.16.0
 synopsis:       P2P library for Bitcoin and Bitcoin Cash
 description:    Please see the README on GitHub at <https://github.com/haskoin/haskoin-node#readme>
 category:       Bitcoin, Finance, Network
@@ -45,15 +45,15 @@ library
     , containers
     , data-default
     , hashable
-    , haskoin-core >=0.14.1
+    , haskoin-core >=0.15.0
     , monad-logger
     , mtl
     , network
     , nqe >=0.6.3
     , random
     , resourcet
-    , rocksdb-haskell-jprupp
-    , rocksdb-query >=0.3.1
+    , rocksdb-haskell-jprupp >=2.1.2
+    , rocksdb-query >=0.4.2
     , string-conversions
     , text
     , time
@@ -81,7 +81,7 @@ test-suite spec
     , containers
     , data-default
     , hashable
-    , haskoin-core >=0.14.1
+    , haskoin-core >=0.15.0
     , haskoin-node
     , hspec
     , monad-logger
@@ -90,8 +90,8 @@ test-suite spec
     , nqe >=0.6.3
     , random
     , resourcet
-    , rocksdb-haskell-jprupp
-    , rocksdb-query >=0.3.1
+    , rocksdb-haskell-jprupp >=2.1.2
+    , rocksdb-query >=0.4.2
     , safe
     , string-conversions
     , text

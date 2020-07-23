@@ -184,16 +184,17 @@ withTestNode net str f =
     runNoLoggingT $
     withSystemTempDirectory ("haskoin-node-test-" <> str <> "-") $ \w ->
     withPublisher $ \pub ->
-    R.withDB w def{R.createIfMissing = True, R.errorIfExists = True} $ \db -> do
+    R.withDBCF w cfg cols $ \db -> do
         let ad = NetworkAddress
                  nodeNetwork
                  (sockToHostAddress (SockAddrInet 0 0))
             na = NetworkAddress
                  0
                  (sockToHostAddress (SockAddrInet 0 0))
-            cfg = NodeConfig
+            cfg' = NodeConfig
                   { nodeConfMaxPeers = 20
                   , nodeConfDB = db
+                  , nodeConfColumnFamily = Just (head (R.columnFamilies db))
                   , nodeConfPeers = [("127.0.0.1", 17486)]
                   , nodeConfDiscover = False
                   , nodeConfNetAddr = na
@@ -203,13 +204,16 @@ withTestNode net str f =
                   , nodeConfPeerMaxLife = 48 * 3600
                   , nodeConfConnect = dummyPeerConnect net ad
                   }
-        withNode cfg $ \(Node mgr ch) ->
+        withNode cfg' $ \(Node mgr ch) ->
             withSubscription pub $ \sub ->
             lift $
             f TestNode { testMgr = mgr
                        , testChain = ch
                        , nodeEvents = sub
                        }
+  where
+    cfg = def{R.createIfMissing = True, R.errorIfExists = True}
+    cols = [("node", def)]
 
 allBlocks :: [Block]
 allBlocks =
