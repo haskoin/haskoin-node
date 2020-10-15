@@ -17,11 +17,11 @@ packages:
     git: https://github.com/haskoin/haskoin-core.git
     pantry-tree:
       size: 6319
-      sha256: ea69667fc8333718aa0bd658f3113ad9feb3fe1f9ea859035392d8e0b873b432
-    commit: 64645381a305ec7d85adc9bbfb314273399a07f3
+      sha256: 1c97698c82e79ee786845f79120006d9bb28214cfe3262951c76540fd8039cf9
+    commit: 166e4b8565b630c4103557a02a94d201eea6ae16
   original:
     git: https://github.com/haskoin/haskoin-core.git
-    commit: 64645381a305ec7d85adc9bbfb314273399a07f3
+    commit: 166e4b8565b630c4103557a02a94d201eea6ae16
 - completed:
     hackage: secp256k1-haskell-0.4.0@sha256:696dff6f5f84c83041c290b198e872d39241dbe62eb206627264ebdff6fe7958,1930
     pantry-tree:

@@ -8,7 +8,7 @@ nix:
 extra-deps:
   - nqe-0.6.3
   - git: https://github.com/haskoin/haskoin-core.git
-    commit: 64645381a305ec7d85adc9bbfb314273399a07f3
+    commit: 166e4b8565b630c4103557a02a94d201eea6ae16
   - secp256k1-haskell-0.4.0
   - rocksdb-haskell-jprupp-2.1.2
   - rocksdb-query-0.4.2
