@@ -12,12 +12,16 @@ packages:
   original:
     hackage: nqe-0.6.3
 - completed:
-    hackage: haskoin-core-0.15.0@sha256:f4fff61f850c48f4f3be368cdd65951a088724512e7fc56e504e9da9f97a3fa3,4791
+    name: haskoin-core
+    version: 0.17.0
+    git: https://github.com/haskoin/haskoin-core.git
     pantry-tree:
-      size: 5110
-      sha256: f60304e2b2de3458ab2bd55d805f95e1796fce9f52f46f3425969277938fcdfe
+      size: 6319
+      sha256: ea69667fc8333718aa0bd658f3113ad9feb3fe1f9ea859035392d8e0b873b432
+    commit: 64645381a305ec7d85adc9bbfb314273399a07f3
   original:
-    hackage: haskoin-core-0.15.0
+    git: https://github.com/haskoin/haskoin-core.git
+    commit: 64645381a305ec7d85adc9bbfb314273399a07f3
 - completed:
     hackage: secp256k1-haskell-0.4.0@sha256:696dff6f5f84c83041c290b198e872d39241dbe62eb206627264ebdff6fe7958,1930
     pantry-tree:
