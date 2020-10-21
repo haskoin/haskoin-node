@@ -29,7 +29,7 @@ import           Control.Monad             (forM_, forever, guard, when)
 import           Control.Monad.Except      (runExceptT, throwError)
 import           Control.Monad.Logger      (MonadLoggerIO, logDebugS, logErrorS,
                                             logInfoS)
-import           Control.Monad.Reader      (MonadReader, ReaderT, asks,
+import           Control.Monad.Reader      (MonadReader, ReaderT (..), asks,
                                             runReaderT)
 import           Control.Monad.Trans       (lift)
 import           Control.Monad.Trans.Maybe (MaybeT (..), runMaybeT)
@@ -169,8 +169,7 @@ instance Serialize BestBlockKey where
         return BestBlockKey
     put BestBlockKey = putWord8 0x91
 
-instance (Monad m, MonadIO m, MonadReader ChainConfig m) =>
-         BlockHeaders m where
+instance MonadIO m => BlockHeaders (ReaderT ChainConfig m) where
     addBlockHeader bn = do
         db <- asks chainConfDB
         asks chainConfColumnFamily >>= \case
@@ -202,12 +201,18 @@ instance (Monad m, MonadIO m, MonadReader ChainConfig m) =>
         f Nothing bn   = insertOp (BlockHeaderKey (h bn)) bn
         f (Just cf) bn = insertOpCF cf (BlockHeaderKey (h bn)) bn
 
+instance MonadIO m => BlockHeaders (ReaderT Chain m) where
+    getBlockHeader bh = ReaderT $ chainGetBlock bh
+    getBestBlockHeader = ReaderT chainGetBest
+    addBlockHeader _ = undefined
+    setBestBlockHeader _ = undefined
+    addBlockHeaders _ = undefined
+
 withBlockHeaders :: MonadChain m => ReaderT ChainConfig m a -> m a
 withBlockHeaders f = do
     cfg <- asks myConfig
     runReaderT f cfg
 
--- | Launch process to synchronize block headers in current thread.
 withChain ::
        (MonadUnliftIO m, MonadLoggerIO m)
     => ChainConfig
