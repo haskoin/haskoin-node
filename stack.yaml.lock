@@ -5,19 +5,12 @@
 
 packages:
 - completed:
-    hackage: nqe-0.6.3@sha256:f22b16fc5723d5c8836dba19ff051dbbae0d3ebfdbeaa1ca2077ea4b3c5b6f32,1628
-    pantry-tree:
-      size: 665
-      sha256: ee2c74f9ee8163924d7a3ecf0dee65ed1b8dd16e03af3a7b10d3f2451e92afc4
-  original:
-    hackage: nqe-0.6.3
-- completed:
-    hackage: haskoin-core-0.17.2@sha256:f74cbc5365899c560c3d174be2e2f4ac8534ced929f21248a651e11b1871f80f,4791
+    hackage: haskoin-core-0.17.4@sha256:bac111ed0824bbe9d6d3dae3545c04ea01500179c70a207bae192e3ce4bd13de,4782
     pantry-tree:
       size: 5110
-      sha256: 50e904e1ccd1a31e88da0171f749bae4410ef314214ff5f34250b1332a547dec
+      sha256: f9429cce1730e5b093771fadbd5bfd708d134737814dd8e800c9efaad96fbfb5
   original:
-    hackage: haskoin-core-0.17.2
+    hackage: haskoin-core-0.17.4
 - completed:
     hackage: secp256k1-haskell-0.5.0@sha256:26d8897b0b81a1ca46134e3b1cc7784c975880e2334936d92681b07ae9703c26,2158
     pantry-tree:
@@ -41,7 +34,7 @@ packages:
     hackage: rocksdb-query-0.4.2
 snapshots:
 - completed:
-    size: 532414
-    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/16/22.yaml
-    sha256: e483fb88549fc0f454c190979bf35ac91c7aceff2c0e71e7d8edd11842d772d8
-  original: lts-16.22
+    size: 532835
+    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/16/24.yaml
+    sha256: cf2b52420b2262fe9cf0f6744929120131abd6675b1c3fb2d8b155a47f80d103
+  original: lts-16.24
