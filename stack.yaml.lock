@@ -5,16 +5,12 @@
 
 packages:
 - completed:
-    name: haskoin-core
-    version: 0.20.0
-    git: https://github.com/haskoin/haskoin-core.git
+    hackage: haskoin-core-0.20.0@sha256:06f3257d9290d3407950f2a32f2ae51868b611f6898602af91135503887de636,4836
     pantry-tree:
-      size: 6319
-      sha256: 75dd29d0aeb47680b7f9fb34cc353a216f52c45876e422314e7631cab8059de7
-    commit: 46112458f58ecc56b2c14dace7caebe00888ebd4
+      size: 5111
+      sha256: 9c2014f2e6af8b461fcc5729241a7d4f95b3c50ad2bbdaca43f5ec9077a79087
   original:
-    git: https://github.com/haskoin/haskoin-core.git
-    commit: 46112458f58ecc56b2c14dace7caebe00888ebd4
+    hackage: haskoin-core-0.20.0@sha256:06f3257d9290d3407950f2a32f2ae51868b611f6898602af91135503887de636,4836
 snapshots:
 - completed:
     size: 563103
