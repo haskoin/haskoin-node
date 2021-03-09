@@ -231,13 +231,13 @@ withChain cfg action = do
         ch = Chain { chainReader = rd
                    , chainMailbox = mailbox
                    }
+    runReaderT initChainDB rd
     withAsync (main_loop ch rd inbox) $ \a ->
         link a >> action ch
   where
     main_loop ch rd inbox = withSyncLoop ch $
-        run inbox `runReaderT` rd
+        runReaderT (run inbox) rd
     run inbox = do
-        initChainDB
         withBlockHeaders getBestBlockHeader >>=
             chainEvent . ChainBestBlock
         forever $ do
