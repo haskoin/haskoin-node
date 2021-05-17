@@ -47,7 +47,8 @@ import           Data.Set                  (Set)
 import qualified Data.Set                  as Set
 import           Data.String.Conversions   (cs)
 import           Data.Time.Clock           (NominalDiffTime, UTCTime,
-                                            diffUTCTime, getCurrentTime)
+                                            addUTCTime, diffUTCTime,
+                                            getCurrentTime)
 import           Data.Time.Clock.POSIX     (utcTimeToPOSIXSeconds)
 import           Data.Word                 (Word32, Word64)
 import           Haskoin                   (BlockHeight, Message (..),
@@ -57,16 +58,16 @@ import           Haskoin                   (BlockHeight, Message (..),
                                             hostToSockAddr, nodeNetwork,
                                             sockToHostAddress)
 import           Haskoin.Node.Peer
-import           Network.Socket            (AddrInfo (..), AddrInfoFlag (..),
-                                            Family (..), SockAddr (..),
-                                            SocketType (..), defaultHints,
-                                            getAddrInfo)
 import           NQE                       (Child, Inbox, Mailbox, Publisher,
                                             Strategy (..), Supervisor, addChild,
                                             inboxToMailbox, newInbox,
                                             newMailbox, publish, receive,
                                             receiveMatch, send, sendSTM,
                                             withSupervisor)
+import           Network.Socket            (AddrInfo (..), AddrInfoFlag (..),
+                                            Family (..), SockAddr (..),
+                                            SocketType (..), defaultHints,
+                                            getAddrInfo)
 import           System.Random             (randomIO, randomRIO)
 import           UnliftIO                  (Async, MonadIO, MonadUnliftIO, STM,
                                             SomeException, TVar, atomically,
@@ -136,6 +137,7 @@ data OnlinePeer =
         , onlinePeerPings       :: ![NominalDiffTime]
         , onlinePeerConnectTime :: !UTCTime
         , onlinePeerTickled     :: !UTCTime
+        , onlinePeerDisconnect  :: !UTCTime
         }
 
 instance Eq OnlinePeer where
@@ -183,7 +185,7 @@ peerManager inb = do
     $(logDebugS) "PeerManager" "Awaiting best block"
     putBestBlock <=< receiveMatch inb $ \case
         ManagerBest b -> Just b
-        _ -> Nothing
+        _             -> Nothing
     $(logDebugS) "PeerManager" "Starting peer manager actor"
     forever loop
   where
@@ -330,24 +332,20 @@ checkPeer p =
     getBusy p >>= \case
         True -> return ()
         False -> do
-            PeerManagerConfig
-                { peerManagerMaxLife = max_age
-                , peerManagerTimeout = to
-                } <- asks myConfig
+            to <- asks (peerManagerTimeout . myConfig)
             b <- asks onlinePeers
-            now <- liftIO getCurrentTime
             atomically (findPeer b p) >>= \case
                 Nothing -> return ()
                 Just o -> do
-                    check_conn max_age now o
+                    now <- liftIO getCurrentTime
+                    check_conn now o
                     when (check_tickle now to o) (check_ping o)
   where
     check_tickle now to o =
         now `diffUTCTime` onlinePeerTickled o > to
-    check_conn max_age now o = do
-        let t = onlinePeerConnectTime o
-        when (now `diffUTCTime` t > max_age) $
-            killPeer PeerTooOld p
+    check_conn now o =
+        when (onlinePeerDisconnect o `diffUTCTime` now > 0) $
+        killPeer PeerTooOld p
     check_ping o =
         case onlinePeerPing o of
             Nothing ->
@@ -484,7 +482,11 @@ connectPeer sa = do
                 sup `addChild` io (launch pc busy inbox p)
             MVersion ver `sendMessage` p
             b <- asks onlinePeers
-            _ <- atomically $ newOnlinePeer b sa nonce p a now
+            max_life <- asks (peerManagerMaxLife . myConfig)
+            rand <- liftIO $ toRational <$> randomRIO (0.75 :: Double, 1.00)
+            let life = max_life * fromRational rand
+            let dc = life `addUTCTime` now
+            _ <- atomically $ newOnlinePeer b sa nonce p a now dc
             return ()
   where
     srv net
@@ -504,8 +506,10 @@ withPeerLoop ::
     -> m a
 withPeerLoop _ p mgr =
     withAsync . forever $ do
-        let time_out = floor $ peerManagerTimeout $ myConfig mgr
-        threadDelay (time_out * 1000000)
+        let x = peerManagerTimeout (myConfig mgr)
+            y = floor (x * 1000000)
+        r <- liftIO $ randomRIO (y * 3 `div` 4, y)
+        threadDelay r
         managerCheck p mgr
 
 withConnectLoop :: (MonadUnliftIO m, MonadManager m)
@@ -531,7 +535,7 @@ newPeer sa = do
     o <- asks onlinePeers
     atomically $
         findPeerAddress o sa >>= \case
-            Just _ -> return ()
+            Just _  -> return ()
             Nothing -> modifyTVar b $ Set.insert sa
 
 networkSeeds :: Network -> [HostPort]
@@ -588,8 +592,9 @@ newOnlinePeer ::
     -> Peer
     -> Async ()
     -> UTCTime
+    -> UTCTime
     -> STM OnlinePeer
-newOnlinePeer box addr nonce p peer_async connect_time = do
+newOnlinePeer box addr nonce p peer_async connect_time dc = do
     let op = OnlinePeer
              { onlinePeerAddress = addr
              , onlinePeerVerAck = False
@@ -602,6 +607,7 @@ newOnlinePeer box addr nonce p peer_async connect_time = do
              , onlinePeerPing = Nothing
              , onlinePeerConnectTime = connect_time
              , onlinePeerTickled = connect_time
+             , onlinePeerDisconnect = dc
              }
     insertPeer box op
     return op
@@ -622,7 +628,7 @@ modifyPeer :: TVar [OnlinePeer]
 modifyPeer b p f =
     findPeer b p >>= \case
         Nothing -> return ()
-        Just o -> insertPeer b $ f o
+        Just o  -> insertPeer b $ f o
 
 removePeer :: TVar [OnlinePeer] -> Peer -> STM ()
 removePeer b p =
