@@ -520,7 +520,7 @@ withConnectLoop act =
     link a >> act
   where
     go = forever $ do
-        l <- length <$> getConnectedPeers
+        l <- length <$> getOnlinePeers
         x <- asks (peerManagerMaxPeers . myConfig)
         when (l < x) $
             getNewPeer >>= mapM_ (\sa -> ask >>= managerConnect sa)
