@@ -344,7 +344,7 @@ checkPeer p =
     check_tickle now to o =
         now `diffUTCTime` onlinePeerTickled o > to
     check_conn now o =
-        when (onlinePeerDisconnect o `diffUTCTime` now > 0) $
+        when (now `diffUTCTime` onlinePeerDisconnect o > 0) $
         killPeer PeerTooOld p
     check_ping o =
         case onlinePeerPing o of
