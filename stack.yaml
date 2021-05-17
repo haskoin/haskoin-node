@@ -6,4 +6,5 @@ nix:
     - zlib
     - pkg-config
 extra-deps:
-  - haskoin-core-0.20.2@sha256:70ca2c8095da2ad849bd698f6ca21e34f29b8d26513ae09c268952d7241b8741,4836
+  - git: https://github.com/haskoin/haskoin-core.git
+    commit: 73fcd3c401ab38995802b4ccf9e2043eb00b6ff2

@@ -46,10 +46,12 @@ import           Data.Word                 (Word32)
 import           Haskoin                   (Block (..), BlockHash (..),
                                             GetData (..), InvType (..),
                                             InvVector (..), Message (..),
+                                            MessageCommand (..),
                                             MessageHeader (..), Network (..),
                                             NotFound (..), Ping (..), Pong (..),
-                                            Tx, TxHash (..), getMessage,
-                                            headerHash, putMessage, txHash)
+                                            Tx, TxHash (..), commandToString,
+                                            getMessage, headerHash, putMessage,
+                                            txHash)
 import           NQE                       (Inbox, Mailbox, Publisher,
                                             inboxToMailbox, publish, receive,
                                             receiveMatchS, send,
@@ -80,7 +82,7 @@ data PeerException
     = PeerMisbehaving !String
     | DuplicateVersion
     | DecodeHeaderError
-    | CannotDecodePayload
+    | CannotDecodePayload !MessageCommand
     | PeerIsMyself
     | PayloadTooLarge !Word32
     | PeerAddressInvalid
@@ -93,19 +95,20 @@ data PeerException
     deriving Eq
 
 instance Show PeerException where
-    show (PeerMisbehaving s) = "Peer misbehaving: " <> s
-    show DuplicateVersion    = "Duplicate version"
-    show DecodeHeaderError   = "Error decoding header"
-    show CannotDecodePayload = "Cannot decode payload"
-    show PeerIsMyself        = "Peer is myself"
-    show (PayloadTooLarge s) = "Payload too large: " <> show s
-    show PeerAddressInvalid  = "Peer address invalid"
-    show PeerSentBadHeaders  = "Peer sent bad headers"
-    show NotNetworkPeer      = "Not network peer"
-    show PeerNoSegWit        = "Segwit not supported by peer"
-    show PeerTimeout         = "Peer timed out"
-    show UnknownPeer         = "Unknown peer"
-    show PeerTooOld          = "Peer too old"
+    show (PeerMisbehaving s)     = "Peer misbehaving: " <> s
+    show DuplicateVersion        = "Duplicate version"
+    show DecodeHeaderError       = "Error decoding header"
+    show (CannotDecodePayload c) = "Cannot decode payload: " <>
+                                   cs (commandToString c)
+    show PeerIsMyself            = "Peer is myself"
+    show (PayloadTooLarge s)     = "Payload too large: " <> show s
+    show PeerAddressInvalid      = "Peer address invalid"
+    show PeerSentBadHeaders      = "Peer sent bad headers"
+    show NotNetworkPeer          = "Not network peer"
+    show PeerNoSegWit            = "Segwit not supported by peer"
+    show PeerTimeout             = "Peer timed out"
+    show UnknownPeer             = "Unknown peer"
+    show PeerTooOld              = "Peer too old"
 
 instance Exception PeerException
 
@@ -187,7 +190,7 @@ inPeerConduit net a =
                     (peerLog a)
                     "Could not decode incoming message header"
                 throwIO DecodeHeaderError
-            Right (MessageHeader _ _ len _) -> do
+            Right (MessageHeader _ cmd len _) -> do
                 when (len > 32 * 2 ^ (20 :: Int)) $ do
                     $(logErrorS) (peerLog a) "Payload too large"
                     throwIO $ PayloadTooLarge len
@@ -195,8 +198,10 @@ inPeerConduit net a =
                 case runGet (getMessage net) $ x `B.append` y of
                     Left e -> do
                         $(logErrorS) (peerLog a) $
-                            "Cannot decode payload: " <> cs (show e)
-                        throwIO CannotDecodePayload
+                            "Cannot decode payload (" <>
+                            cs (commandToString cmd) <>
+                            "): " <> cs (show e)
+                        throwIO (CannotDecodePayload cmd)
                     Right msg -> yield msg
 
 -- | Outgoing peer conduit to serialize and send messages.
@@ -327,4 +332,4 @@ filterReceive :: MonadIO m => Peer -> Inbox (Peer, Message) -> m Message
 filterReceive p inb =
     receive inb >>= \case
         (p', msg) | p == p' -> return msg
-        _ -> filterReceive p inb
+        _                   -> filterReceive p inb
