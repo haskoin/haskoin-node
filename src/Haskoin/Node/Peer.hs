@@ -92,6 +92,7 @@ data PeerException
     | PeerTimeout
     | UnknownPeer
     | PeerTooOld
+    | EmptyHeader
     deriving Eq
 
 instance Show PeerException where
@@ -109,6 +110,7 @@ instance Show PeerException where
     show PeerTimeout             = "Peer timed out"
     show UnknownPeer             = "Unknown peer"
     show PeerTooOld              = "Peer too old"
+    show EmptyHeader             = "Empty header"
 
 instance Exception PeerException
 
@@ -184,13 +186,14 @@ inPeerConduit :: MonadLoggerIO m
 inPeerConduit net a =
     forever $ do
         x <- takeCE 24 .| foldC
+        when (B.null x) $ do
+            $(logErrorS) (peerLog a) $ "Peer sent empty header"
+            throwIO EmptyHeader
         case decode x of
             Left e -> do
                 $(logErrorS) (peerLog a) $
-                    "Could not decode message header: " <>
-                    encodeHex x
-                $(logErrorS) (peerLog a) $
-                    "Error: " <> cs e
+                    "Could not decode message header: \"" <>
+                    encodeHex x <> "\""
                 throwIO DecodeHeaderError
             Right (MessageHeader _ cmd len _) -> do
                 when (len > 32 * 2 ^ (20 :: Int)) $ do
