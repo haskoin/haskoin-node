@@ -50,8 +50,8 @@ import           Haskoin                   (Block (..), BlockHash (..),
                                             MessageHeader (..), Network (..),
                                             NotFound (..), Ping (..), Pong (..),
                                             Tx, TxHash (..), commandToString,
-                                            getMessage, headerHash, putMessage,
-                                            txHash)
+                                            encodeHex, getMessage, headerHash,
+                                            putMessage, txHash)
 import           NQE                       (Inbox, Mailbox, Publisher,
                                             inboxToMailbox, publish, receive,
                                             receiveMatchS, send,
@@ -185,10 +185,12 @@ inPeerConduit net a =
     forever $ do
         x <- takeCE 24 .| foldC
         case decode x of
-            Left _ -> do
-                $(logErrorS)
-                    (peerLog a)
-                    "Could not decode incoming message header"
+            Left e -> do
+                $(logErrorS) (peerLog a) $
+                    "Could not decode message header: " <>
+                    encodeHex x
+                $(logErrorS) (peerLog a) $
+                    "Error: " <> cs e
                 throwIO DecodeHeaderError
             Right (MessageHeader _ cmd len _) -> do
                 when (len > 32 * 2 ^ (20 :: Int)) $ do
