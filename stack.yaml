@@ -1,4 +1,4 @@
-resolver: lts-18.10
+resolver: lts-18.16
 nix:
   packages:
     - rocksdb
@@ -6,4 +6,5 @@ nix:
     - zlib
     - pkg-config
 extra-deps:
-  - haskoin-core-0.20.5
+  - git: https://github.com/haskoin/haskoin-core.git
+    commit: 87e07915214156cd50fda3d07d7b2cbf415f5461
