@@ -4,8 +4,6 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings     #-}
 {-# LANGUAGE RecordWildCards       #-}
-{-# LANGUAGE TemplateHaskell       #-}
-{-# LANGUAGE TupleSections         #-}
 {-# LANGUAGE TypeFamilies          #-}
 module Haskoin.Node.Peer
     ( PeerConfig(..)
@@ -150,28 +148,27 @@ peer :: (MonadUnliftIO m, MonadLoggerIO m)
      -> TVar Bool
      -> Inbox PeerMessage
      -> m ()
-peer cfg busy inbox = do
+peer cfg@PeerConfig{..} busy inbox = do
     p <- wrapPeer cfg busy (inboxToMailbox inbox)
-    withRunInIO $ connect . (. peer_session p)
+    withRunInIO $ \restore -> do
+        peerConfConnect (peer_session p)
   where
-    connect = peerConfConnect cfg
     go = forever $ receive inbox >>= dispatchMessage cfg
-    net = peerConfNetwork cfg
-    peer_session p ad =
+    peer_session p ad = do
         let ins = transPipe liftIO (inboundConduit ad)
             ons = transPipe liftIO (outboundConduit ad)
             src = runConduit $
                 ins
-                .| inPeerConduit net (peerConfText cfg)
+                .| inPeerConduit peerConfNetwork peerConfText
                 .| mapM_C (send_msg p)
-            snk = outPeerConduit net .| ons
-         in withAsync src $ \as -> do
-                link as
-                runConduit (go .| snk)
-    send_msg p msg = publish (p, msg) (peerConfPub cfg)
+            snk = outPeerConduit peerConfNetwork .| ons
+        withAsync src $ \as -> do
+            link as
+            runConduit (go .| snk)
+    send_msg p msg = publish (p, msg) peerConfPub
 
 -- | Internal function to dispatch peer messages.
-dispatchMessage :: MonadLoggerIO m
+dispatchMessage :: MonadIO m
                 => PeerConfig
                 -> PeerMessage
                 -> ConduitT i Message m ()
@@ -179,7 +176,7 @@ dispatchMessage _ (SendMessage msg) = yield msg
 dispatchMessage _ (KillPeer e)      = throwIO e
 
 -- | Internal conduit to parse messages coming from peer.
-inPeerConduit :: MonadLoggerIO m
+inPeerConduit :: MonadIO m
               => Network
               -> Text
               -> ConduitT ByteString Message m ()
@@ -187,25 +184,16 @@ inPeerConduit net a =
     forever $ do
         x <- takeCE 24 .| foldC
         when (B.null x) $ do
-            $(logErrorS) (peerLog a) $ "Peer sent empty header"
             throwIO EmptyHeader
         case decode x of
             Left e -> do
-                $(logErrorS) (peerLog a) $
-                    "Could not decode message header: \"" <>
-                    encodeHex x <> "\""
                 throwIO DecodeHeaderError
             Right (MessageHeader _ cmd len _) -> do
                 when (len > 32 * 2 ^ (20 :: Int)) $ do
-                    $(logErrorS) (peerLog a) "Payload too large"
                     throwIO $ PayloadTooLarge len
                 y <- takeCE (fromIntegral len) .| foldC
                 case runGet (getMessage net) $ x `B.append` y of
                     Left e -> do
-                        $(logErrorS) (peerLog a) $
-                            "Cannot decode payload (" <>
-                            cs (commandToString cmd) <>
-                            "): " <> cs (show e)
                         throwIO (CannotDecodePayload cmd)
                     Right msg -> yield msg
 

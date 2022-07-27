@@ -34,16 +34,17 @@ import           Haskoin                (Block (..), BlockHash (..),
                                          getMessage, headerHash, nodeNetwork,
                                          putMessage, sockToHostAddress, txHash)
 import           Haskoin.Node
-import           Network.Socket         (SockAddr (..))
+import           Network.Socket         (SockAddr (..), AddrInfo (addrAddress))
 import           NQE                    (Inbox, Mailbox, inboxToMailbox,
                                          newInbox, receive, receiveMatch, send,
                                          withPublisher, withSubscription)
 import           System.Random          (randomIO)
-import           Test.Hspec             (Spec, describe, it, shouldBe,
-                                         shouldSatisfy)
+import           Test.Hspec
+import           Test.Hspec.QuickCheck
 import           UnliftIO               (MonadIO, MonadUnliftIO, liftIO,
                                          throwString, withAsync,
                                          withSystemTempDirectory)
+import Haskoin.Node (toHostService)
 
 data TestNode = TestNode
     { testMgr    :: PeerManager
@@ -107,6 +108,24 @@ mockPeerReact _ = []
 spec :: Spec
 spec = do
     let net = bchRegTest
+    describe "reads address/port combinations" $ do
+        prop "reads arbitrary addresses" $ \(e, w1, w2, w3, w4, b) -> do
+            let p = toEnum (e `mod` 65536)
+                a = if b 
+                    then SockAddrInet p w1
+                    else SockAddrInet6 p 0 (w1, w2, w3, w4) 0
+            s <- head <$> toSockAddr net (show a)
+            s `shouldBe` a
+        it "reads some specific addresses" $ do
+            toHostService "localhost" `shouldBe` (Just "localhost", Nothing)
+            toHostService "::1" `shouldBe` (Just "::1",  Nothing)
+            toHostService "localhost:8080" `shouldBe` (Just "localhost", Just "8080")
+            toHostService "example.com" `shouldBe` (Just "example.com", Nothing)
+            toHostService "api.example.com:443" `shouldBe` (Just "api.example.com", Just "443")
+            toHostService "api.example.com:http" `shouldBe` (Just "api.example.com", Just "http")
+            toHostService "[::1]" `shouldBe` (Just "::1", Nothing)
+            toHostService "[::1]:8080" `shouldBe` (Just "::1", Just "8080")
+            toHostService "[2002::dead:beef]:ssh" `shouldBe` (Just "2002::dead:beef", Just "ssh")
     describe "peer manager on test network" $ do
         it "connects to a peer" $
             withTestNode net "connect-one-peer" $ \TestNode {..} -> do
@@ -195,7 +214,7 @@ withTestNode net str f =
                   { nodeConfMaxPeers = 20
                   , nodeConfDB = db
                   , nodeConfColumnFamily = Just (head (R.columnFamilies db))
-                  , nodeConfPeers = [("127.0.0.1", 17486)]
+                  , nodeConfPeers = ["[::1]:17486"]
                   , nodeConfDiscover = False
                   , nodeConfNetAddr = na
                   , nodeConfNet = net

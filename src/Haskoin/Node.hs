@@ -16,7 +16,7 @@ module Haskoin.Node
 import           Control.Monad           (forever)
 import           Control.Monad.Logger    (MonadLoggerIO)
 import           Data.Conduit.Network    (appSink, appSource, clientSettings,
-                                          runTCPClient)
+                                          runTCPClient, ClientSettings)
 import           Data.String.Conversions (cs)
 import           Data.Time.Clock         (NominalDiffTime)
 import           Database.RocksDB        (ColumnFamily, DB)
@@ -42,7 +42,7 @@ data NodeConfig = NodeConfig
       -- ^ database handler
     , nodeConfColumnFamily :: !(Maybe ColumnFamily)
       -- ^ database column family
-    , nodeConfPeers        :: ![HostPort]
+    , nodeConfPeers        :: ![String]
       -- ^ static list of peers to connect to
     , nodeConfDiscover     :: !Bool
       -- ^ activate peer discovery
@@ -73,18 +73,20 @@ withConnection :: SockAddr -> WithConnection
 withConnection na f =
     fromSockAddr na >>= \case
         Nothing -> throwIO PeerAddressInvalid
-        Just (host, port) -> do
-            let cset = clientSettings port (cs host)
+        Just cset ->
             runTCPClient cset $ \ad ->
                 f (Conduits (appSource ad) (appSink ad))
 
 fromSockAddr ::
-       (MonadUnliftIO m) => SockAddr -> m (Maybe HostPort)
+       (MonadUnliftIO m) => SockAddr -> m (Maybe ClientSettings)
 fromSockAddr sa = go `catch` e
   where
     go = do
         (maybe_host, maybe_port) <- liftIO (getNameInfo flags True True sa)
-        return $ (,) <$> maybe_host <*> (readMaybe =<< maybe_port)
+        return $
+          clientSettings 
+          <$> (readMaybe =<< maybe_port) 
+          <*> (cs <$> maybe_host)
     flags = [NI_NUMERICHOST, NI_NUMERICSERV]
     e :: Monad m => SomeException -> m (Maybe a)
     e _ = return Nothing

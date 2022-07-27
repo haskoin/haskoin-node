@@ -10,9 +10,6 @@ module Haskoin.Node.Manager
     ( PeerManagerConfig (..)
     , PeerEvent (..)
     , OnlinePeer (..)
-    , HostPort
-    , Host
-    , Port
     , PeerManager
     , withPeerManager
     , managerBest
@@ -26,8 +23,11 @@ module Haskoin.Node.Manager
     , getOnlinePeer
     , buildVersion
     , myVersion
+    , toSockAddr
+    , toHostService
     ) where
 
+import           Control.Arrow
 import           Control.Monad             (forM_, forever, guard, void, when,
                                             (<=<))
 import           Control.Monad.Except      (ExceptT (..), runExceptT,
@@ -41,7 +41,7 @@ import           Control.Monad.Trans       (lift)
 import           Control.Monad.Trans.Maybe (MaybeT (..), runMaybeT)
 import           Data.Bits                 ((.&.))
 import           Data.Function             (on)
-import           Data.List                 (find, nub, sort)
+import           Data.List                 (find, nub, sort, dropWhileEnd, elemIndex)
 import           Data.Maybe                (fromMaybe, isJust)
 import           Data.Set                  (Set)
 import qualified Data.Set                  as Set
@@ -76,10 +76,6 @@ import           UnliftIO                  (Async, MonadIO, MonadUnliftIO, STM,
                                             withAsync, withRunInIO, writeTVar)
 import           UnliftIO.Concurrent       (threadDelay)
 
-type HostPort = (Host, Port)
-type Host = String
-type Port = Int
-
 type MonadManager m = (MonadIO m, MonadReader PeerManager m)
 
 data PeerEvent
@@ -90,7 +86,7 @@ data PeerEvent
 data PeerManagerConfig =
     PeerManagerConfig
         { peerManagerMaxPeers :: !Int
-        , peerManagerPeers    :: ![HostPort]
+        , peerManagerPeers    :: ![String]
         , peerManagerDiscover :: !Bool
         , peerManagerNetAddr  :: !NetworkAddress
         , peerManagerNetwork  :: !Network
@@ -213,15 +209,16 @@ loadPeers = do
 
 loadStaticPeers :: (MonadUnliftIO m, MonadManager m) => m ()
 loadStaticPeers = do
+    net <- asks (peerManagerNetwork . myConfig)
     xs <- asks (peerManagerPeers . myConfig)
-    mapM_ newPeer =<< concat <$> mapM toSockAddr xs
+    mapM_ newPeer . concat =<< mapM (toSockAddr net) xs
 
 loadNetSeeds :: (MonadUnliftIO m, MonadManager m) => m ()
 loadNetSeeds =
     asks (peerManagerDiscover . myConfig) >>= \discover ->
         when discover $ do
             net <- getNetwork
-            ss <- concat <$> mapM toSockAddr (networkSeeds net)
+            ss <- concat <$> mapM (toSockAddr net) (getSeeds net)
             mapM_ newPeer ss
 
 logConnectedPeers :: (MonadManager m, MonadLoggerIO m) => m ()
@@ -538,9 +535,6 @@ newPeer sa = do
             Just _  -> return ()
             Nothing -> modifyTVar b $ Set.insert sa
 
-networkSeeds :: Network -> [HostPort]
-networkSeeds net = map (, getDefaultPort net) (getSeeds net)
-
 gotPong :: TVar [OnlinePeer] -> Word64 -> UTCTime -> Peer -> STM ()
 gotPong b nonce now p = void . runMaybeT $ do
     o <- MaybeT $ findPeer b p
@@ -700,20 +694,36 @@ managerTickle :: MonadIO m
 managerTickle p mgr =
     PeerTickle p `send` myMailbox mgr
 
-toSockAddr :: MonadUnliftIO m => HostPort -> m [SockAddr]
-toSockAddr (host, port) = go `catch` e
+toHostService :: String -> (Maybe String, Maybe String)
+toHostService str =
+    let host = case m6 of
+            Just (x, _) -> Just x
+            Nothing -> case takeWhile (/= ':') str of
+                [] -> Nothing
+                xs -> Just xs
+        srv = case m6 of
+            Just (_, y) -> s y
+            Nothing -> s str
+        s xs =
+            case dropWhile (/= ':') xs of
+                [] -> Nothing
+                _ : ys -> Just ys
+        m6 = case str of
+            (x : xs)
+                | x == '[' -> do
+                    i <- elemIndex ']' xs
+                    return $ second tail $ splitAt i xs
+                | x == ':' -> do
+                    return (str, "")
+            _ -> Nothing
+    in (host, srv)
+
+toSockAddr :: MonadUnliftIO m => Network -> String -> m [SockAddr]
+toSockAddr net str = 
+    go `catch` e
   where
-    go =
-        fmap (map addrAddress) . liftIO $
-        getAddrInfo
-            (Just
-                 defaultHints
-                 { addrFlags = [AI_ADDRCONFIG]
-                 , addrSocketType = Stream
-                 , addrFamily = AF_INET
-                 })
-            (Just host)
-            (Just (show port))
+    go = fmap (map addrAddress) $ liftIO $ getAddrInfo Nothing host srv
+    (host, srv) = toHostService str
     e :: Monad m => SomeException -> m [SockAddr]
     e _ = return []
 
@@ -721,12 +731,11 @@ median :: (Ord a, Fractional a) => [a] -> Maybe a
 median ls
     | null ls =
           Nothing
-    | length ls `mod` 2 == 0 =
+    | even (length ls) =
           Just . (/ 2) . sum . take 2 $
           drop (length ls `div` 2 - 1) ls'
     | otherwise =
-          Just . head $
-          drop (length ls `div` 2) ls'
+          Just (ls' !! (length ls `div` 2))
   where
     ls' = sort ls
 

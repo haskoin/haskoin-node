@@ -3,21 +3,10 @@
 # For more information, please see the documentation at:
 #   https://docs.haskellstack.org/en/stable/lock_files
 
-packages:
-- completed:
-    name: haskoin-core
-    version: 0.21.0
-    git: https://github.com/haskoin/haskoin-core.git
-    pantry-tree:
-      size: 6895
-      sha256: b4bdf54fe12392f91951afe6eb59f041a8676d383b50e98dcea6f5da2cc3f2f8
-    commit: d74a4801b7d4214c78383453d8a20a06877ff57e
-  original:
-    git: https://github.com/haskoin/haskoin-core.git
-    commit: d74a4801b7d4214c78383453d8a20a06877ff57e
+packages: []
 snapshots:
 - completed:
-    size: 586286
-    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/18/16.yaml
-    sha256: cdead65fca0323144b346c94286186f4969bf85594d649c49c7557295675d8a5
-  original: lts-18.16
+    size: 619163
+    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/19/16.yaml
+    sha256: a27a5761890ade44d7dd21a5f5f93c87e60b9c063655fff835d69dd1071474f0
+  original: lts-19.16
