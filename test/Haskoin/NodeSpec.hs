@@ -44,7 +44,6 @@ import           Test.Hspec.QuickCheck
 import           UnliftIO               (MonadIO, MonadUnliftIO, liftIO,
                                          throwString, withAsync,
                                          withSystemTempDirectory)
-import Haskoin.Node (toHostService)
 
 data TestNode = TestNode
     { testMgr    :: PeerManager

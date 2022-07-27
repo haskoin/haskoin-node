@@ -75,6 +75,7 @@ import           UnliftIO                  (Async, MonadIO, MonadUnliftIO, STM,
                                             newTVarIO, readTVar, readTVarIO,
                                             withAsync, withRunInIO, writeTVar)
 import           UnliftIO.Concurrent       (threadDelay)
+import Control.Applicative ((<|>))
 
 type MonadManager m = (MonadIO m, MonadReader PeerManager m)
 
@@ -723,7 +724,9 @@ toSockAddr net str =
     go `catch` e
   where
     go = fmap (map addrAddress) $ liftIO $ getAddrInfo Nothing host srv
-    (host, srv) = toHostService str
+    (host, srv) = 
+        second (<|> Just (show (getDefaultPort net))) $
+        toHostService str
     e :: Monad m => SomeException -> m [SockAddr]
     e _ = return []
 
