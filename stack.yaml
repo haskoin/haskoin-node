@@ -1,4 +1,4 @@
-resolver: lts-21.0
+resolver: lts-21.4
 nix:
   packages:
     - rocksdb
@@ -7,5 +7,5 @@ nix:
     - pkg-config
 extra-deps:
   - base16-1.0@sha256:9b72a280a7af75a5026fa25a1b8ae18ec10200a070947723f1fd61dc8d407862,2472
-  - secp256k1-haskell-0.7.0@sha256:1585601c67d7c62c698402ffe8462de216a499608521a8136d0aa15f0a03a23f,2140
-  - haskoin-core-0.22.0@sha256:d6a180619df675f070e88b4be8ba2bff72e5e85fe03a696cde5815849e517227,4938
+  - haskoin-core-1.0.0@sha256:8143c623715455a27ff50cbcdaa11437d2776d63b47f619639f5099c312507d3,5065
+  - secp256k1-haskell-1.0.0@sha256:42e1dc0ddba74b752bddf7d55c19aa10b24ff6f51889a53bc07c2ff2107aca16,2082
