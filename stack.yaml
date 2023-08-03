@@ -1,4 +1,4 @@
-resolver: lts-21.4
+resolver: nightly-2023-08-02
 nix:
   packages:
     - rocksdb
@@ -6,6 +6,5 @@ nix:
     - zlib
     - pkg-config
 extra-deps:
-  - base16-1.0@sha256:9b72a280a7af75a5026fa25a1b8ae18ec10200a070947723f1fd61dc8d407862,2472
-  - haskoin-core-1.0.0@sha256:8143c623715455a27ff50cbcdaa11437d2776d63b47f619639f5099c312507d3,5065
+  - haskoin-core-1.0.1@sha256:3b373c31079b1ebe7925c4e281f5c155279c36152f2af912159bfb8c80ed1904,5065
   - secp256k1-haskell-1.0.0@sha256:42e1dc0ddba74b752bddf7d55c19aa10b24ff6f51889a53bc07c2ff2107aca16,2082

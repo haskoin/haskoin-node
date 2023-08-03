@@ -20,8 +20,9 @@ module Haskoin.Node
 where
 
 import Control.Monad (forever)
-import Control.Monad.Cont (ContT (..), MonadCont (callCC), cont, lift, runCont, runContT)
+import Control.Monad.Cont (ContT (..), MonadCont (callCC), cont, runCont, runContT)
 import Control.Monad.Logger (MonadLoggerIO)
+import Control.Monad.Trans (lift)
 import Data.Conduit.Network
   ( ClientSettings,
     appSink,
