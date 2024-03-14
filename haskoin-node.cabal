@@ -1,13 +1,13 @@
 cabal-version: 1.12
 
--- This file has been generated from package.yaml by hpack version 0.35.2.
+-- This file has been generated from package.yaml by hpack version 0.36.0.
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 51c15a8bee88319c9b79cc8cdd5f1cdbf3768d63a83aad7e0c94b9d65df6b062
+-- hash: c56f9a61287f962d4f9870ad229340d99f35d1201e06976dbf99c360cc3b73c4
 
 name:           haskoin-node
-version:        1.0.1
+version:        1.1.0
 synopsis:       P2P library for Bitcoin and Bitcoin Cash
 description:    Please see the README on GitHub at <https://github.com/haskoin/haskoin-node#readme>
 category:       Bitcoin, Finance, Network
